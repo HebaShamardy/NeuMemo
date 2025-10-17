@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "NeuMemo",
+  "version": "1.0",
+  "description": "Collects titles, URLs, and page text from all open tabs and stores them locally for AI-based organization.",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "*://*/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "NeuMemo"
+  }
+}
