@@ -26,7 +26,40 @@ function populateTable(tableId, tabs) {
         row.insertCell(0).textContent = tab.title;
         const urlCell = row.insertCell(1);
         urlCell.innerHTML = `<a href="${tab.url}" target="_blank" rel="noopener noreferrer">${tab.url}</a>`;
-        row.insertCell(2).textContent = tab.content || '';
+        
+        const contentCell = row.insertCell(2);
+        const fullContent = tab.content || '';
+        const words = fullContent.trim().split(/\s+/);
+
+        if (words.length > 30) {
+            const truncatedContent = words.slice(0, 30).join(' ') + '...';
+
+            const truncatedSpan = document.createElement('span');
+            truncatedSpan.textContent = truncatedContent;
+
+            const fullContentSpan = document.createElement('span');
+            fullContentSpan.textContent = fullContent;
+            fullContentSpan.style.display = 'none';
+
+            const moreButton = document.createElement('button');
+            moreButton.textContent = 'Show More';
+            moreButton.className = 'more-button';
+            
+            moreButton.addEventListener('click', () => {
+                const isShowingFull = fullContentSpan.style.display !== 'none';
+                fullContentSpan.style.display = isShowingFull ? 'none' : 'inline';
+                truncatedSpan.style.display = isShowingFull ? 'inline' : 'none';
+                moreButton.textContent = isShowingFull ? 'Show More' : 'Show Less';
+            });
+
+            contentCell.appendChild(truncatedSpan);
+            contentCell.appendChild(fullContentSpan);
+            contentCell.appendChild(document.createElement('br'));
+            contentCell.appendChild(moreButton);
+        } else {
+            contentCell.textContent = fullContent;
+        }
+
         row.insertCell(3).textContent = tab.timestamp;
     } else { // rejected-tabs
         const urlCell = row.insertCell(0);
