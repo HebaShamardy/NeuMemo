@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeuMemo Viewer</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <h1>NeuMemo Tab Viewer</h1>
+    <button id="collect-tabs">Collect Current Tabs</button>
+    
+    <h2>Collected Tabs</h2>
+    <table id="collected-tabs">
+        <thead>
+            <tr>
+                <th>Title</th>
+                <th>URL</th>
+                <th>Content</th>
+                <th>Timestamp</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- Collected tabs will be populated here -->
+        </tbody>
+    </table>
+
+    <h2>Rejected Tabs</h2>
+    <table id="rejected-tabs">
+        <thead>
+            <tr>
+                <th>URL</th>
+                <th>Reason</th>
+                <th>Timestamp</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- Rejected tabs will be populated here -->
+        </tbody>
+    </table>
+
+    <script src="viewer.js"></script>
+</body>
+</html>

@@ -6,7 +6,8 @@
   "permissions": [
     "tabs",
     "scripting",
-    "activeTab"
+    "activeTab",
+    "storage"
   ],
   "host_permissions": [
     "*://*/*",
@@ -18,5 +19,11 @@
   },
   "action": {
     "default_title": "NeuMemo"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["viewer.html", "viewer.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }
