@@ -33,8 +33,35 @@ chrome.action.onClicked.addListener(async () => {
     } catch (err) {
       // avoid unhandled rejection and log reason (permission, restricted page, etc.)
       console.warn("⚠️ Injection failed for", tab.url, err);
-      // save failure info into rejected_tabs store
-      saveRejectedTab(tab.url, String(err))
+
+      // Try reload + retry once before marking rejected
+      let finalError = err;
+      try {
+        if (tab.id) {
+          // reload the tab (wrap callback in a Promise)
+          await new Promise((resolve) => chrome.tabs.reload(tab.id, () => resolve()));
+          // short delay to let page start loading
+          await new Promise((r) => setTimeout(r, 1200));
+
+          try {
+            await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              files: ["content.js"]
+            });
+            console.log("→ Injection succeeded after reload:", tab.url);
+            continue; // don't save as rejected, move to next tab
+          } catch (retryErr) {
+            console.warn("⚠️ Retry injection after reload failed for", tab.url, retryErr);
+            finalError = retryErr || finalError;
+          }
+        }
+      } catch (reloadErr) {
+        console.warn("⚠️ Reload failed for", tab.url, reloadErr);
+        finalError = reloadErr || finalError;
+      }
+
+      // save failure info into rejected_tabs store (only after failed retry)
+      saveRejectedTab(tab.url, String(finalError))
         .then(() => console.log("→ Saved rejected tab:", tab.url))
         .catch((saveErr) => console.error("❌ Failed to save rejected tab:", tab.url, saveErr));
     }
