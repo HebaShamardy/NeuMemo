@@ -10,11 +10,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ success: false, error: String(err) });
       });
     return true; // keep the message channel (and SW) alive until sendResponse is called
+  } else if (message.type === "COLLECT_TABS") {
+    console.log("🧠 Received collect tabs request from viewer...");
+    injectContentScriptsIntoAllTabs();
+    sendResponse({ status: "Collection process started." });
+    return false; // No need to keep channel open
   }
 });
 
-chrome.action.onClicked.addListener(async () => {
-  console.log("🧠 NeuMemo icon clicked — injecting content.js...");
+async function injectContentScriptsIntoAllTabs() {
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
     if (!tab.id || !tab.url) continue;
@@ -31,43 +35,19 @@ chrome.action.onClicked.addListener(async () => {
       });
       console.log("→ Injected into:", tab.url);
     } catch (err) {
-      // avoid unhandled rejection and log reason (permission, restricted page, etc.)
       console.warn("⚠️ Injection failed for", tab.url, err);
-
-      // Try reload + retry once before marking rejected
-      let finalError = err;
-      try {
-        if (tab.id) {
-          // reload the tab (wrap callback in a Promise)
-          await new Promise((resolve) => chrome.tabs.reload(tab.id, () => resolve()));
-          // short delay to let page start loading
-          await new Promise((r) => setTimeout(r, 1200));
-
-          try {
-            await chrome.scripting.executeScript({
-              target: { tabId: tab.id },
-              files: ["content.js"]
-            });
-            console.log("→ Injection succeeded after reload:", tab.url);
-            continue; // don't save as rejected, move to next tab
-          } catch (retryErr) {
-            console.warn("⚠️ Retry injection after reload failed for", tab.url, retryErr);
-            finalError = retryErr || finalError;
-          }
-        }
-      } catch (reloadErr) {
-        console.warn("⚠️ Reload failed for", tab.url, reloadErr);
-        finalError = reloadErr || finalError;
-      }
-
-      // save failure info into rejected_tabs store (only after failed retry)
-      saveRejectedTab(tab.url, String(finalError))
+      // Your existing retry/rejection logic can be placed here or called from here
+      saveRejectedTab(tab.url, String(err))
         .then(() => console.log("→ Saved rejected tab:", tab.url))
         .catch((saveErr) => console.error("❌ Failed to save rejected tab:", tab.url, saveErr));
     }
   }
-});
+}
 
+chrome.action.onClicked.addListener(async () => {
+  console.log("🧠 NeuMemo icon clicked — opening viewer...");
+  chrome.tabs.create({ url: chrome.runtime.getURL("viewer.html") });
+});
 
 function saveToIndexedDB(tabData) {
   const DB_NAME = "NeuMemoDB";
@@ -89,7 +69,6 @@ function saveToIndexedDB(tabData) {
         if (db.objectStoreNames.contains(STORE_NAME)) {
           return resolve(db);
         }
-        // store missing -> upgrade to next version to create it
         const newVersion = db.version + 1;
         db.close();
         const req2 = indexedDB.open(DB_NAME, newVersion);
@@ -135,7 +114,6 @@ function saveToIndexedDB(tabData) {
   });
 }
 
-// New: save rejected tab info to "rejected_tabs" store
 function saveRejectedTab(url, reason) {
   const DB_NAME = "NeuMemoDB";
   const STORE_NAME = "rejected_tabs";
@@ -156,7 +134,6 @@ function saveRejectedTab(url, reason) {
         if (db.objectStoreNames.contains(STORE_NAME)) {
           return resolve(db);
         }
-        // store missing -> upgrade to next version to create it
         const newVersion = db.version + 1;
         db.close();
         const req2 = indexedDB.open(DB_NAME, newVersion);
