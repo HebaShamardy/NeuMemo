@@ -39,6 +39,10 @@
         </tbody>
     </table>
 
-    <script src="viewer.js"></script>
+    <script type="module" src="viewer.js"></script>
+    <!-- firebase_ai is a module that should be triggered by user action to avoid
+         automatic API calls at load time (and CSP/permission issues). It can be
+         imported and its functions called from the UI when needed. -->
+    <script type="module" src="firebase_ai.js"></script>
 </body>
 </html>

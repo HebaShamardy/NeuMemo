@@ -1,1 +1,4 @@
 scripts/*
+instructions
+node_modules/*
+dist/*

@@ -1,0 +1,28 @@
+{
+  "dependencies": {
+    "firebase": "^12.4.0",
+    "vite": "^7.1.12"
+  },
+  "name": "neumemo",
+  "version": "1.0.0",
+  "description": "NeuMemo is a Chrome extension designed to collect and organize information from your browsing sessions. It captures the titles, URLs, and text content of open tabs and stores them locally for easy access and organization.",
+  "main": "background.js",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HebaShamardy/NeuMemo.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/HebaShamardy/NeuMemo/issues"
+  },
+  "homepage": "https://github.com/HebaShamardy/NeuMemo#readme"
+}
+
+

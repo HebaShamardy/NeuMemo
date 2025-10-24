@@ -19,28 +19,69 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function injectContentScriptsIntoAllTabs() {
-  const tabs = await chrome.tabs.query({});
-  for (const tab of tabs) {
-    if (!tab.id || !tab.url) continue;
-    // only attempt real web pages
-    if (!/^https?:\/\//.test(tab.url)) {
-      console.log("⤷ Skipping (unsupported URL):", tab.url);
+  // Collect tabs from all windows to avoid missing tabs in other windows or
+  // special window states. Use windows.getAll({populate:true}) which returns
+  // tabs for each window, and fall back to tabs.query if needed.
+  let allTabs = [];
+  try {
+    const wins = await chrome.windows.getAll({ populate: true });
+    for (const w of wins) {
+      if (Array.isArray(w.tabs)) allTabs.push(...w.tabs);
+    }
+  } catch (err) {
+    console.warn('Could not get windows with tabs, falling back to tabs.query', err);
+  }
+
+  if (allTabs.length === 0) {
+    try {
+      allTabs = await chrome.tabs.query({});
+    } catch (err) {
+      console.error('Failed to query tabs:', err);
+      return;
+    }
+  }
+
+  // Helper: small sleep to avoid spamming many injections at once
+  const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+  for (const tab of allTabs) {
+    const tabId = tab.id;
+    const url = tab.url || tab.pendingUrl || '';
+    if (!tabId || !url) {
+      console.log('⤷ Skipping (no id or url):', tab);
       continue;
     }
 
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        files: ["content.js"]
-      });
-      console.log("→ Injected into:", tab.url);
-    } catch (err) {
-      console.warn("⚠️ Injection failed for", tab.url, err);
-      // Your existing retry/rejection logic can be placed here or called from here
-      saveRejectedTab(tab.url, String(err))
-        .then(() => console.log("→ Saved rejected tab:", tab.url))
-        .catch((saveErr) => console.error("❌ Failed to save rejected tab:", tab.url, saveErr));
+    // only attempt real web pages
+    if (!/^https?:\/\//.test(url)) {
+      console.log('⤷ Skipping (unsupported URL):', url);
+      continue;
     }
+
+    // Try injection with a couple retries and a small delay between attempts
+    let injected = false;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+        console.log('→ Injected into:', url);
+        injected = true;
+        break;
+      } catch (err) {
+        console.warn(`⚠️ Injection attempt ${attempt} failed for`, url, err);
+        // small backoff before retrying
+        await sleep(250 * attempt);
+      }
+    }
+
+    if (!injected) {
+      // Save as rejected once retries exhausted
+      saveRejectedTab(url, 'injection_failed')
+        .then(() => console.log('→ Saved rejected tab:', url))
+        .catch((saveErr) => console.error('❌ Failed to save rejected tab:', url, saveErr));
+    }
+
+    // Throttle a bit between tabs to reduce contention
+    await sleep(50);
   }
 }
 
