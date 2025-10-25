@@ -68,6 +68,15 @@ async function injectContentScriptsIntoAllTabs() {
         break;
       } catch (err) {
         console.warn(`⚠️ Injection attempt ${attempt} failed for`, url, err);
+        
+        // Reload tab on injection failure
+        try {
+          await chrome.tabs.reload(tabId);
+          console.log('→ Reloaded tab:', url);
+        } catch (reloadErr) {
+          console.warn('⚠️ Failed to reload tab:', url, reloadErr);
+        }
+        
         // small backoff before retrying
         await sleep(250 * attempt);
       }
