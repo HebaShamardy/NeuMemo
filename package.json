@@ -3,6 +3,9 @@
     "firebase": "^12.4.0",
     "vite": "^7.1.12"
   },
+  "devDependencies": {
+    "dotenv": "^16.4.5"
+  },
   "name": "neumemo",
   "version": "1.0.0",
   "description": "NeuMemo is a Chrome extension designed to collect and organize information from your browsing sessions. It captures the titles, URLs, and text content of open tabs and stores them locally for easy access and organization.",
@@ -10,7 +13,8 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite build --watch",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test:ai": "vite-node scripts/firebase_test.js"
   },
   "repository": {
     "type": "git",
