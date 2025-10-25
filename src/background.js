@@ -20,31 +20,41 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function injectContentScriptsIntoAllTabs() {
   // Collect tabs from all windows to avoid missing tabs in other windows or
-  // special window states. Use windows.getAll({populate:true}) which returns
-  // tabs for each window, and fall back to tabs.query if needed.
+  // special window states. Before collecting, try to expand any collapsed
+  // tab groups so grouped tabs are discoverable. Fall back to tabs.query
+  // if windows.getAll fails.
   let allTabs = [];
   try {
-    const wins = await chrome.windows.getAll({ populate: true });
-    for (const w of wins) {
-      if (Array.isArray(w.tabs)) allTabs.push(...w.tabs);
+    // (Optional) expand collapsed groups if you want them visible in the UI
+    if (chrome.tabGroups && chrome.tabGroups.query && chrome.tabGroups.update) {
+      const groups = await chrome.tabGroups.query({});
+      for (const g of groups) {
+        if (g.collapsed) {
+          try {
+            await chrome.tabGroups.update(g.id, { collapsed: false });
+            console.log('→ Expanded tab group:', g.title || g.id);
+          } catch (err) {
+            console.warn('⚠️ Failed to expand tab group:', g, err);
+          }
+        }
+      }
     }
+
+    // 🔥 This is the only reliable way to get *all* tabs
+    allTabs = await chrome.tabs.query({});
+
   } catch (err) {
-    console.warn('Could not get windows with tabs, falling back to tabs.query', err);
+    console.error('Failed to query tabs:', err);
+    return;
   }
 
-  if (allTabs.length === 0) {
-    try {
-      allTabs = await chrome.tabs.query({});
-    } catch (err) {
-      console.error('Failed to query tabs:', err);
-      return;
-    }
-  }
+  console.log('✅ Collected', allTabs.length, 'tabs total');
 
   // Helper: small sleep to avoid spamming many injections at once
   const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
-
+  let count = 1;
   for (const tab of allTabs) {
+    console.log(`⤷ [${count++}/${allTabs.length}] Processing tab:`, tab);
     const tabId = tab.id;
     const url = tab.url || tab.pendingUrl || '';
     if (!tabId || !url) {
@@ -62,6 +72,12 @@ async function injectContentScriptsIntoAllTabs() {
     let injected = false;
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
+        if (tab.frozen || tab.discarded) {
+          await chrome.tabs.reload(tabId);
+          await new Promise(res => setTimeout(res, 300));
+          console.log('→ Reloaded frozen/discarded tab before injection:', url);
+        }
+        
         await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
         console.log('→ Injected into:', url);
         injected = true;
