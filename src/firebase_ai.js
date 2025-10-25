@@ -3,15 +3,21 @@ import { getAI, getGenerativeModel, GoogleAIBackend, InferenceMode } from "fireb
 
 // TODO(developer) Replace the following with your app's Firebase configuration
 // See: https://firebase.google.com/docs/web/learn-more#config-object
-const firebaseConfig = {
-  apiKey: "AIzaSyDDGJoaiSya-5-WKLCxXEkYLA6DC_zHuS4",
-  authDomain: "neumemo-nemo.firebaseapp.com",
-  projectId: "neumemo-nemo",
-  storageBucket: "neumemo-nemo.firebasestorage.app",
-  messagingSenderId: "101837030947",
-  appId: "1:101837030947:web:6cea465cc30dc091e41396",
-  measurementId: "G-D1P3ZSYWEB"
-};
+// Firebase config moved to environment variables.
+// For Vite, expose client env vars with the VITE_ prefix and access them
+// via `import.meta.env.VITE_*`. See `.env.example` for variable names.
+// Destructure the Vite env vars and use them directly in the config object.
+const {
+  VITE_FIREBASE_API_KEY: apiKey,
+  VITE_FIREBASE_AUTH_DOMAIN: authDomain,
+  VITE_FIREBASE_PROJECT_ID: projectId,
+  VITE_FIREBASE_STORAGE_BUCKET: storageBucket,
+  VITE_FIREBASE_MESSAGING_SENDER_ID: messagingSenderId,
+  VITE_FIREBASE_APP_ID: appId,
+  VITE_FIREBASE_MEASUREMENT_ID: measurementId
+} = import.meta.env;
+
+const firebaseConfig = { apiKey, authDomain, projectId, storageBucket, messagingSenderId, appId, measurementId };
 
 // Initialize FirebaseApp
 const firebaseApp = initializeApp(firebaseConfig);
