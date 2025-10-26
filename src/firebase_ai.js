@@ -73,36 +73,9 @@ function recreateModel() {
 
 // Imports + initialization of FirebaseApp and backend service + creation of model instance
 
-// Wrap in an async function so you can use await
-async function run() {
-    // Provide a prompt that contains text
-    const prompt = "Write a story about a magic backpack."
-
-    // To generate text output, call `generateContent` with a properly shaped
-    // request object. Use a contents array with a user role and parts array so
-    // on-device checks won't fail (they expect `parts` to be iterable).
-    const request = {
-        contents: [
-            {
-                role: 'user',
-                parts: [{ text: prompt }]
-            }
-        ]
-    };
-
-    const result = await model.generateContent(request);
-
-    const response = result.response;
-    const text = response.text();
-    console.log(text);
-}
-
-import { getEncoding } from "tiktoken";
 
 // ... existing code ...
 
-// Summarize multiple tabs at once. `tabs` must be an array of objects
-// with { title, url, content }.
 async function summarizeTabs(tabs, maxTokens = 1000000) {
     if (!Array.isArray(tabs)) {
         throw new Error('summarizeTabs expects an array of tabs');
@@ -110,46 +83,55 @@ async function summarizeTabs(tabs, maxTokens = 1000000) {
 
     const encoding = get_encoding("cl100k_base");
 
-    const basePrompt = `Task: You are a session manager AI for browser tabs.
+    let tabsInput = '';
+    let tabsInPrompt = 0;
+    
+    // First, calculate how many tabs can fit and build the input string.
+    // We start with a temporary token count for the prompt that will be added later.
+    const promptTemplate = `Task: You are a session manager AI for browser tabs.
 
 Input:
-You will receive multiple tabs separated by the token <tab>.  
+You will receive TABS_COUNT tabs separated by the token <NEMO_tab>.  
 Each tab includes its:
 - Title  
 - URL  
 - Document body inner text (page content)
 
 Goal:
-Analyze each tab separately and return a JSON array of tab objects.
+Analyze each tab separately and return a JSON array containing exactly TABS_COUNT tab objects.
 
 Each tab object must follow this structure:
 {
   "tab_id": "url",
   "language": <detected_language>,
   "title": "<page_title>",
-  "summarized_content": <short_summary_of_page_topic>,
+  "summarized_content": <detailed_summary_representing_all_major_topics_and_sections_of_the_page>,
   "tags": <list_of_relevant_keywords>,
   "main_class": <main_generic_class e.g. "technology", "politics", "social", "shopping", "education", "entertainment", "health", "finance">,
   "classes": <list_of_additional_related_classes>
 }
 
 Rules:
-- Detect the tab’s main language and use it for all generated values.  
-- Summaries should be concise (2–3 sentences max) and reflect the core topic.  
-- Tags: 3–8 short, meaningful words for search or categorization.  
-- main_class: one generic high-level topic.  
-- classes: optional broader or related groups.  
-- Output only valid JSON (no extra text, explanations, or <tab> markers).  
-- Each tab is independent — don’t merge data across tabs.
+- Detect the main language of each tab and generate all values in that language.
+- The "summarized_content" must reflect **all key sections** and **informational points** from the tab (not just a short overview).
+  - Capture the purpose, structure, instructions, and main ideas of the page.
+  - Prioritize factual and topic-rich information over navigation or UI text.
+  - Keep it readable, factual, and ready for later full-text search or recall.
+- Tags: 5–10 short, meaningful keywords relevant for future retrieval.
+- main_class: one broad category representing the tab’s main domain.
+- classes: additional topical or contextual categories (e.g. “developer docs”, “AI tools”, “reference guide”).
+- Output only valid JSON — no explanations, no <tab> markers, no prose outside JSON.
+- Each tab is processed independently.
 
-Example Input:
+In the end, re-check the correctness of the JSON structure and ensure it matches the specified schema exactly.
 `;
+    // A rough estimation for the prompt template itself, excluding the tabs content.
+    // This is not perfect but gives us a buffer.
+    let totalTokens = encoding.encode(promptTemplate).length;
 
-    let tabsInput = '';
-    let totalTokens = encoding.encode(basePrompt).length;
 
     for (const t of tabs) {
-        const tabHeader = `\n<tab>\nTitle: ${t.title}\nURL: ${t.url}\nContent: `;
+        const tabHeader = `\n<NEMO_tab>\nTitle: ${t.title}\nURL: ${t.url}\nContent: `;
         const headerTokens = encoding.encode(tabHeader).length;
         
         if (totalTokens + headerTokens > maxTokens) {
@@ -171,13 +153,20 @@ Example Input:
         const finalTabString = `${tabHeader}${truncatedContent}`;
         tabsInput += finalTabString;
         totalTokens += encoding.encode(finalTabString).length;
+        tabsInPrompt++;
     }
 
-    const prompt = `${basePrompt}${tabsInput}\n\nPlease output ONLY the JSON array of tab objects (no surrounding text).`;
+    console.log(`📊 Prompt includes ${tabsInPrompt} of ${tabs.length} tabs provided.`);
+    console.log(`📊 Final prompt token count: ${totalTokens}`);
+
+    // Now, construct the final prompt with the exact number of tabs.
+    const finalPrompt = `${promptTemplate.replace(/TABS_COUNT/g, tabsInPrompt)}${tabsInput}\n\nPlease output ONLY the JSON array of tab objects (no surrounding text).`;
+
+    // console.log("📝 Full AI Request Prompt:", finalPrompt);
 
     const request = {
         contents: [
-            { role: 'user', parts: [{ text: prompt }] }
+            { role: 'user', parts: [{ text: finalPrompt }] }
         ]
     };
 
@@ -190,40 +179,7 @@ Example Input:
         throw new Error('AI response was not an array');
     }
 
-    // Persist only the AI outputs (the array of tab objects) into IndexedDB
-    await saveSummariesToIndexedDB(parsed);
-
     return parsed;
-}
-
-// Persist summaries to IndexedDB under database 'neumemo' and store 'tab_summaries'
-function saveSummariesToIndexedDB(summaries) {
-    return new Promise((resolve, reject) => {
-        const openReq = indexedDB.open('neumemo', 1);
-        openReq.onupgradeneeded = (ev) => {
-            const db = ev.target.result;
-            if (!db.objectStoreNames.contains('tab_summaries')) {
-                db.createObjectStore('tab_summaries', { keyPath: 'tab_id' });
-            }
-        };
-        openReq.onsuccess = (ev) => {
-            const db = ev.target.result;
-            const tx = db.transaction('tab_summaries', 'readwrite');
-            const store = tx.objectStore('tab_summaries');
-            for (const item of summaries) {
-                // Only save the AI output object (assumed to follow schema)
-                try {
-                    store.put(item);
-                } catch (e) {
-                    // continue storing others; errors handled by transaction.onerror
-                    console.warn('Failed to put item', item, e);
-                }
-            }
-            tx.oncomplete = () => { db.close(); resolve(); };
-            tx.onerror = (e) => { reject(tx.error || e); };
-        };
-        openReq.onerror = (e) => reject(e);
-    });
 }
 
 // NOTE: do not auto-run the sample on module load. Extensions have strict
@@ -234,6 +190,5 @@ function saveSummariesToIndexedDB(summaries) {
 // import { run } from './firebase_ai.js';
 // document.getElementById('generate').addEventListener('click', run);
 
-export { run };
 export { summarizeTabs };
 export { recreateModel };
