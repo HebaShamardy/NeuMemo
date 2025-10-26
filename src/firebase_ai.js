@@ -1,5 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getAI, getGenerativeModel, GoogleAIBackend, InferenceMode, Schema } from "firebase/ai";
+import { get_encoding } from "tiktoken";
 
 // TODO(developer) Replace the following with your app's Firebase configuration
 // See: https://firebase.google.com/docs/web/learn-more#config-object
@@ -25,23 +26,27 @@ const firebaseApp = initializeApp(firebaseConfig);
 // Initialize the Gemini Developer API backend service
 const ai = getAI(firebaseApp, { backend: new GoogleAIBackend() });
 
-const responseSchema = Schema.object({
-properties: {
-    tab_id: Schema.string(),
-    language: Schema.string(),
-    title: Schema.string(),
-    summarized_content: Schema.string(),
-    tags: Schema.array({ items: Schema.string() }),
-    main_class: Schema.string(),
-    classes: Schema.array({ items: Schema.string() })
-}
+// The model will return an ARRAY of tab objects. Each item follows the
+// structure defined below.
+const responseSchema = Schema.array({
+    items: Schema.object({
+        properties: {
+            tab_id: Schema.string(),
+            language: Schema.string(),
+            title: Schema.string(),
+            summarized_content: Schema.string(),
+            tags: Schema.array({ items: Schema.string() }),
+            main_class: Schema.string(),
+            classes: Schema.array({ items: Schema.string() })
+        }
+    })
 });
 // Create a `GenerativeModel` instance (lazy-created/re-creatable)
 // Set the mode, for example to use on-device model when possible
 let model = getGenerativeModel(ai,
     {
         mode: InferenceMode.PREFER_ON_DEVICE,
-        model: "gemini-2.5-flash",
+        model: "gemini-2.5-pro",
         // In the generation config, set the `responseMimeType` to `application/json`
         // and pass the JSON schema object into `responseSchema`.
         generationConfig: {
@@ -56,7 +61,7 @@ function recreateModel() {
     model = getGenerativeModel(ai,
         {
             mode: InferenceMode.PREFER_ON_DEVICE,
-            model: "gemini-2.5-flash",
+            model: "gemini-2.5-pro",
             // In the generation config, set the `responseMimeType` to `application/json`
             // and pass the JSON schema object into `responseSchema`.
             generationConfig: {
@@ -92,34 +97,134 @@ async function run() {
     console.log(text);
 }
 
-// Summarize a page using the AI model and return parsed JSON according to the
-// structured prompt provided by the user. Returns the parsed object or throws
-// if parsing/AI fails.
-async function summarizePage({ title, url, content }) {
+import { getEncoding } from "tiktoken";
 
-    // Short prompt: describe the task and provide the page data. The JSON
-    // structure is enforced via the responseSchema rather than spelled out in
-    // the prompt body.
-    const prompt = `You are a browser session intelligence agent. Analyze the page and return the requested fields as JSON that match the provided schema.\n\nTitle: ${title}\nURL: ${url}\nContent: ${content}
-    You are required to detect site language then return the json values. the values shall be in same language
-    {
-    "tab_id": "url",
-    "language": <language_value>,
-    "title": "<tab_title>",
-    "summarized_content":<generate_summary_of_the_tab_topic>,
-    "tags": <list_of_tag_for_search>,
-    "main_class": <suggested_generic_class>, e.g. tech, politics, social
-    "classes": <suggest_classes_to_use_ith_other_tabs>
-    }`;
-    let result = await model.generateContent(prompt)
-    let response = result.response.text();
-    const cleaned_response = response.trim().replace("```json", '').replace("```", '');
-    const jsonResponse = JSON.parse(cleaned_response);
+// ... existing code ...
 
-    console.log(jsonResponse.summarized_content); // Example usage
-    return jsonResponse;
-
+// Summarize multiple tabs at once. `tabs` must be an array of objects
+// with { title, url, content }.
+async function summarizeTabs(tabs, maxTokens = 1000000) {
+    if (!Array.isArray(tabs)) {
+        throw new Error('summarizeTabs expects an array of tabs');
     }
+
+    const encoding = get_encoding("cl100k_base");
+
+    const basePrompt = `Task: You are a session manager AI for browser tabs.
+
+Input:
+You will receive multiple tabs separated by the token <tab>.  
+Each tab includes its:
+- Title  
+- URL  
+- Document body inner text (page content)
+
+Goal:
+Analyze each tab separately and return a JSON array of tab objects.
+
+Each tab object must follow this structure:
+{
+  "tab_id": "url",
+  "language": <detected_language>,
+  "title": "<page_title>",
+  "summarized_content": <short_summary_of_page_topic>,
+  "tags": <list_of_relevant_keywords>,
+  "main_class": <main_generic_class e.g. "technology", "politics", "social", "shopping", "education", "entertainment", "health", "finance">,
+  "classes": <list_of_additional_related_classes>
+}
+
+Rules:
+- Detect the tab’s main language and use it for all generated values.  
+- Summaries should be concise (2–3 sentences max) and reflect the core topic.  
+- Tags: 3–8 short, meaningful words for search or categorization.  
+- main_class: one generic high-level topic.  
+- classes: optional broader or related groups.  
+- Output only valid JSON (no extra text, explanations, or <tab> markers).  
+- Each tab is independent — don’t merge data across tabs.
+
+Example Input:
+`;
+
+    let tabsInput = '';
+    let totalTokens = encoding.encode(basePrompt).length;
+
+    for (const t of tabs) {
+        const tabHeader = `\n<tab>\nTitle: ${t.title}\nURL: ${t.url}\nContent: `;
+        const headerTokens = encoding.encode(tabHeader).length;
+        
+        if (totalTokens + headerTokens > maxTokens) {
+            console.warn('Skipping a tab as the prompt is already too large for more tabs.');
+            break; // No more space for even a header
+        }
+
+        let availableTokens = maxTokens - totalTokens - headerTokens;
+        let contentTokens = encoding.encode(t.content || '');
+        
+        let truncatedContent;
+        if (contentTokens.length > availableTokens) {
+            truncatedContent = new TextDecoder().decode(encoding.decode(contentTokens.slice(0, availableTokens)));
+            console.warn(`Content for tab ${t.url} was truncated to fit within the token limit.`);
+        } else {
+            truncatedContent = t.content || '';
+        }
+
+        const finalTabString = `${tabHeader}${truncatedContent}`;
+        tabsInput += finalTabString;
+        totalTokens += encoding.encode(finalTabString).length;
+    }
+
+    const prompt = `${basePrompt}${tabsInput}\n\nPlease output ONLY the JSON array of tab objects (no surrounding text).`;
+
+    const request = {
+        contents: [
+            { role: 'user', parts: [{ text: prompt }] }
+        ]
+    };
+
+    const result = await model.generateContent(request);
+    let responseText = result.response.text();
+    const cleaned = responseText.trim().replace(/^```json/, '').replace(/```$/,'').trim();
+    const parsed = JSON.parse(cleaned);
+
+    if (!Array.isArray(parsed)) {
+        throw new Error('AI response was not an array');
+    }
+
+    // Persist only the AI outputs (the array of tab objects) into IndexedDB
+    await saveSummariesToIndexedDB(parsed);
+
+    return parsed;
+}
+
+// Persist summaries to IndexedDB under database 'neumemo' and store 'tab_summaries'
+function saveSummariesToIndexedDB(summaries) {
+    return new Promise((resolve, reject) => {
+        const openReq = indexedDB.open('neumemo', 1);
+        openReq.onupgradeneeded = (ev) => {
+            const db = ev.target.result;
+            if (!db.objectStoreNames.contains('tab_summaries')) {
+                db.createObjectStore('tab_summaries', { keyPath: 'tab_id' });
+            }
+        };
+        openReq.onsuccess = (ev) => {
+            const db = ev.target.result;
+            const tx = db.transaction('tab_summaries', 'readwrite');
+            const store = tx.objectStore('tab_summaries');
+            for (const item of summaries) {
+                // Only save the AI output object (assumed to follow schema)
+                try {
+                    store.put(item);
+                } catch (e) {
+                    // continue storing others; errors handled by transaction.onerror
+                    console.warn('Failed to put item', item, e);
+                }
+            }
+            tx.oncomplete = () => { db.close(); resolve(); };
+            tx.onerror = (e) => { reject(tx.error || e); };
+        };
+        openReq.onerror = (e) => reject(e);
+    });
+}
 
 // NOTE: do not auto-run the sample on module load. Extensions have strict
 // CSP and running the model on load can cause unexpected API calls and
@@ -130,5 +235,5 @@ async function summarizePage({ title, url, content }) {
 // document.getElementById('generate').addEventListener('click', run);
 
 export { run };
-export { summarizePage };
+export { summarizeTabs };
 export { recreateModel };

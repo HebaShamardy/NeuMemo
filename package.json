@@ -1,10 +1,13 @@
 {
   "dependencies": {
     "firebase": "^12.4.0",
+    "tiktoken": "^1.0.22",
     "vite": "^7.1.12"
   },
   "devDependencies": {
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "vite-plugin-top-level-await": "^1.6.0",
+    "vite-plugin-wasm": "^3.5.0"
   },
   "name": "neumemo",
   "version": "1.0.0",
@@ -28,5 +31,3 @@
   },
   "homepage": "https://github.com/HebaShamardy/NeuMemo#readme"
 }
-
-

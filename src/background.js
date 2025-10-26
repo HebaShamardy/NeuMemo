@@ -1,111 +1,150 @@
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+
+
+import { summarizeTabs } from './firebase_ai.js';
+
+// Bulk collection state: when collecting tabs, we buffer incoming TAB_CONTENT
+// messages until all expected tabs have reported, then call summarizeTabs once.
+let bulkExpected = 0;
+let bulkCollected = [];
+let bulkFallbackTimer = null;
+
+chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
   if (message.type === "TAB_CONTENT") {
-    saveToIndexedDB(message.data)
-      .then(() => {
-        console.log("✅ Saved tab data (service worker):", message.data.url);
-        sendResponse({ success: true });
-      })
-      .catch((err) => {
-        console.error("❌ Failed to save tab data:", err);
-        sendResponse({ success: false, error: String(err) });
-      });
-    return true; // keep the message channel (and SW) alive until sendResponse is called
+    // If we're not in bulk collection mode, ignore the message.
+    if (bulkExpected === 0) {
+      console.warn('⚠️ Received TAB_CONTENT message outside of bulk collection mode. Ignoring.');
+      sendResponse({ success: false, error: 'not_in_bulk_mode' });
+      return false;
+    }
+
+    const { title, url, content } = message.data || {};
+    if (!url) {
+      sendResponse({ success: false, error: 'missing_url' });
+      return false;
+    }
+
+    // Dedupe by URL and add to the collection
+    if (!bulkCollected.find((t) => t.url === url)) {
+      bulkCollected.push({ title: title || '', url, content: content || '' });
+      console.log(`→ Buffered TAB_CONTENT for bulk summary: ${bulkCollected.length}/${bulkExpected}`);
+    }
+
+    // Acknowledge receipt to the sender
+    sendResponse({ success: true, buffered: true });
+
+    // If we've gathered all expected tabs, run the bulk summarization.
+    if (bulkCollected.length >= bulkExpected) {
+      if (bulkFallbackTimer) {
+        clearTimeout(bulkFallbackTimer);
+        bulkFallbackTimer = null;
+      }
+      // Use a copy and reset state immediately
+      const collected = bulkCollected.slice();
+      bulkExpected = 0;
+      bulkCollected = [];
+
+      try {
+        console.log('🧠 Running summarizeTabs for', collected.length, 'tabs');
+        const aiResults = await summarizeTabs(collected);
+        console.log('🤖 Full AI Response:', JSON.stringify(aiResults, null, 2));
+        await saveAISummaries(aiResults);
+        console.log('✅ Saved AI summaries for', aiResults.length, 'tabs');
+      } catch (err) {
+        console.error('❌ summarizeTabs failed for bulk collection:', err);
+      }
+    }
+    return false; // we've already sent a response
+
   } else if (message.type === "COLLECT_TABS") {
     console.log("🧠 Received collect tabs request from viewer...");
-    injectContentScriptsIntoAllTabs();
+    // Immediately start the collection process without waiting for it to finish
+    collectAndSummarizeAllTabs();
     sendResponse({ status: "Collection process started." });
     return false; // No need to keep channel open
   }
 });
 
-async function injectContentScriptsIntoAllTabs() {
-  // Collect tabs from all windows to avoid missing tabs in other windows or
-  // special window states. Before collecting, try to expand any collapsed
-  // tab groups so grouped tabs are discoverable. Fall back to tabs.query
-  // if windows.getAll fails.
+async function collectAndSummarizeAllTabs() {
+  // 1. Get all tabs first to determine the expected count
   let allTabs = [];
   try {
-    // (Optional) expand collapsed groups if you want them visible in the UI
-    if (chrome.tabGroups && chrome.tabGroups.query && chrome.tabGroups.update) {
-      const groups = await chrome.tabGroups.query({});
-      for (const g of groups) {
-        if (g.collapsed) {
-          try {
-            await chrome.tabGroups.update(g.id, { collapsed: false });
-            console.log('→ Expanded tab group:', g.title || g.id);
-          } catch (err) {
-            console.warn('⚠️ Failed to expand tab group:', g, err);
-          }
-        }
-      }
-    }
-
-    // 🔥 This is the only reliable way to get *all* tabs
     allTabs = await chrome.tabs.query({});
-
   } catch (err) {
     console.error('Failed to query tabs:', err);
     return;
   }
 
-  console.log('✅ Collected', allTabs.length, 'tabs total');
-
-  // Helper: small sleep to avoid spamming many injections at once
-  const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
-  let count = 1;
-  for (const tab of allTabs) {
-    console.log(`⤷ [${count++}/${allTabs.length}] Processing tab:`, tab);
-    const tabId = tab.id;
+  const injectableTabs = allTabs.filter(tab => {
     const url = tab.url || tab.pendingUrl || '';
-    if (!tabId || !url) {
-      console.log('⤷ Skipping (no id or url):', tab);
-      continue;
-    }
+    return tab.id && url && /^https?:\/\//.test(url);
+  });
 
-    // only attempt real web pages
-    if (!/^https?:\/\//.test(url)) {
-      console.log('⤷ Skipping (unsupported URL):', url);
-      continue;
-    }
+  if (injectableTabs.length === 0) {
+    console.log('No injectable tabs found.');
+    return;
+  }
 
-    // Try injection with a couple retries and a small delay between attempts
-    let injected = false;
-    for (let attempt = 1; attempt <= 2; attempt++) {
+  // 2. Set up the bulk collection state BEFORE injecting any scripts
+  bulkExpected = injectableTabs.length;
+  bulkCollected = [];
+  console.log(`→ Bulk collection started, expecting ${bulkExpected} tab contents`);
+
+  // 3. Set a fallback timer to process whatever is collected after a timeout
+  if (bulkFallbackTimer) clearTimeout(bulkFallbackTimer);
+  bulkFallbackTimer = setTimeout(async () => {
+    if (bulkExpected === 0) return; // Already processed
+    
+    const collected = bulkCollected.slice();
+    console.log(`🕒 Bulk fallback triggered — summarizing ${collected.length} collected tabs`);
+    
+    // Reset state
+    bulkExpected = 0;
+    bulkCollected = [];
+    bulkFallbackTimer = null;
+
+    if (collected.length > 0) {
       try {
-        if (tab.frozen || tab.discarded) {
-          await chrome.tabs.reload(tabId);
-          await new Promise(res => setTimeout(res, 300));
-          console.log('→ Reloaded frozen/discarded tab before injection:', url);
-        }
-        
-        await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
-        console.log('→ Injected into:', url);
-        injected = true;
-        break;
+        const aiResults = await summarizeTabs(collected);
+        await saveAISummaries(aiResults);
+        console.log('✅ Saved AI summaries (fallback) for', aiResults.length, 'tabs');
       } catch (err) {
-        console.warn(`⚠️ Injection attempt ${attempt} failed for`, url, err);
-        
-        // Reload tab on injection failure
-        try {
-          await chrome.tabs.reload(tabId);
-          console.log('→ Reloaded tab:', url);
-        } catch (reloadErr) {
-          console.warn('⚠️ Failed to reload tab:', url, reloadErr);
-        }
-        
-        // small backoff before retrying
-        await sleep(250 * attempt);
+        console.error('❌ Bulk fallback summarizeTabs failed:', err);
       }
     }
+  }, 15000); // 15-second timeout
 
-    if (!injected) {
-      // Save as rejected once retries exhausted
-      saveRejectedTab(url, 'injection_failed')
-        .then(() => console.log('→ Saved rejected tab:', url))
-        .catch((saveErr) => console.error('❌ Failed to save rejected tab:', url, saveErr));
+  // 4. Now, inject scripts into the filtered list of tabs
+  await injectContentScriptsIntoTabs(injectableTabs);
+}
+
+
+async function injectContentScriptsIntoTabs(tabs) {
+  const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+  let count = 1;
+  for (const tab of tabs) {
+    console.log(`⤷ [${count++}/${tabs.length}] Processing tab:`, tab.url);
+    
+    try {
+      // Reload frozen/discarded tabs before injection
+      if (tab.frozen || tab.discarded) {
+        await chrome.tabs.reload(tab.id);
+        await sleep(300); // Give tab time to reload
+        console.log('→ Reloaded frozen/discarded tab:', tab.url);
+      }
+      
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+      console.log('→ Injected into:', tab.url);
+    } catch (err) {
+      console.warn(`⚠️ Injection failed for`, tab.url, err);
+      // If injection fails, we must decrement the expected count
+      // or the bulk collection will never complete.
+      bulkExpected--;
+      saveRejectedTab(tab.url, 'injection_failed')
+        .then(() => console.log('→ Saved rejected tab:', tab.url))
+        .catch((saveErr) => console.error('❌ Failed to save rejected tab:', tab.url, saveErr));
     }
-
-    // Throttle a bit between tabs to reduce contention
+    
+    // Throttle a bit between tabs
     await sleep(50);
   }
 }
@@ -160,6 +199,7 @@ function saveToIndexedDB(tabData) {
             url: tabData.url,
             title: tabData.title,
             content: tabData.content,
+            summarized_content: tabData.summarized_content || null,
             timestamp: new Date().toISOString(),
           });
         } catch (err) {
@@ -226,6 +266,80 @@ function saveRejectedTab(url, reason) {
             reason,
             timestamp: new Date().toISOString(),
           });
+        } catch (err) {
+          db.close();
+          return reject(err);
+        }
+
+        tx.oncomplete = () => {
+          db.close();
+          resolve();
+        };
+        tx.onerror = (ev) => {
+          db.close();
+          reject(ev.target ? ev.target.error : ev);
+        };
+      })
+      .catch((err) => reject(err));
+  });
+}
+
+// Save AI-produced summaries (array of objects that contain at least tab_id)
+function saveAISummaries(summaries) {
+  const DB_NAME = "NeuMemoDB";
+  const STORE_NAME = "tabs";
+
+  function openAndEnsureStore() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME);
+
+      req.onerror = (e) => reject(e.target.error);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(STORE_NAME)) {
+          db.createObjectStore(STORE_NAME, { keyPath: "url" });
+        }
+      };
+      req.onsuccess = (e) => {
+        const db = e.target.result;
+        if (db.objectStoreNames.contains(STORE_NAME)) {
+          return resolve(db);
+        }
+        const newVersion = db.version + 1;
+        db.close();
+        const req2 = indexedDB.open(DB_NAME, newVersion);
+        req2.onerror = (ev) => reject(ev.target.error);
+        req2.onupgradeneeded = (ev) => {
+          const upgradeDb = ev.target.result;
+          if (!upgradeDb.objectStoreNames.contains(STORE_NAME)) {
+            upgradeDb.createObjectStore(STORE_NAME, { keyPath: "url" });
+          }
+        };
+        req2.onsuccess = (ev) => resolve(ev.target.result);
+      };
+    });
+  }
+
+  return new Promise((resolve, reject) => {
+    openAndEnsureStore()
+      .then((db) => {
+        const tx = db.transaction(STORE_NAME, "readwrite");
+        const store = tx.objectStore(STORE_NAME);
+        try {
+          for (const s of summaries) {
+            const url = s.tab_id || s.url || s.tabId;
+            if (!url) continue;
+            store.put({
+              url,
+              title: s.title || null,
+              summarized_content: s.summarized_content || null,
+              language: s.language || null,
+              tags: s.tags || null,
+              main_class: s.main_class || null,
+              classes: s.classes || null,
+              timestamp: new Date().toISOString(),
+            });
+          }
         } catch (err) {
           db.close();
           return reject(err);

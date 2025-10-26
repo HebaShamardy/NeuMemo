@@ -1,12 +1,18 @@
 import { defineConfig } from 'vite';
 import { resolve, basename } from 'path';
 import fs from 'fs';
+import wasm from 'vite-plugin-wasm';
+import topLevelAwait from 'vite-plugin-top-level-await';
 
 // Vite config tailored for a Chrome extension in `src/`.
 // - keeps predictable filenames for manifest and entries
 // - processes viewer.html so its scripts and CSS are bundled
 // - copies manifest.json to the dist root after build
 export default defineConfig({
+  plugins: [
+    wasm(),
+    topLevelAwait()
+  ],
   build: {
     outDir: 'dist',
     rollupOptions: {
