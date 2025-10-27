@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "NeuMemo",
+  "name": "Nemo",
   "version": "1.0",
-  "description": "Collects titles, URLs, and page text from all open tabs and stores them locally for AI-based organization.",
+  "description": "Your smart session manager.",
   "permissions": [
     "tabs",
     "scripting",
@@ -19,11 +19,16 @@
     "type": "module"
   },
   "action": {
-    "default_title": "NeuMemo"
+    "default_title": "Nemo"
+  },
+  "icons": {
+    "16": "imgs/logo.png",
+    "48": "imgs/logo.png",
+    "128": "imgs/logo.png"
   },
   "web_accessible_resources": [
     {
-      "resources": ["viewer.html", "viewer.js"],
+      "resources": ["viewer.html", "viewer.js", "imgs/organize_tabs_button.png", "imgs/logo.png"],
       "matches": ["<all_urls>"]
     }
   ],

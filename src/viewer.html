@@ -3,41 +3,33 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NeuMemo Viewer</title>
+    <title>Nemo</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <h1>NeuMemo Tab Viewer</h1>
-    <button id="collect-tabs">Collect Current Tabs</button>
-    
-    <h2>Collected Tabs</h2>
-    <table id="collected-tabs">
-        <thead>
-            <tr>
-                <th>Session Name</th>
-                <th>URL</th>
-                <th>Summary</th>
-            </tr>
-        </thead>
-        <tbody>
-            <!-- Collected tabs will be populated here -->
-        </tbody>
-    </table>
-
-    <h2>Rejected Tabs</h2>
-    <table id="rejected-tabs">
-        <thead>
-            <tr>
-                <th>URL</th>
-                <th>Reason</th>
-                <th>Timestamp</th>
-            </tr>
-        </thead>
-        <tbody>
-            <!-- Rejected tabs will be populated here -->
-        </tbody>
-    </table>
-
+    <div class="container">
+        <div id="sidebar">
+            <h2>Sessions</h2>
+            <ul id="sessions-list">
+                <!-- Session items will be populated here -->
+            </ul>
+            <button id="new-session" class="action-button">New Session</button>
+        </div>
+        <div id="main-content">
+            <div id="header">
+                <img src="imgs/logo.png" alt="Nemo Logo" id="main-logo">
+                <p class="tagline">A memory fish for your digital ocean.</p>
+            </div>
+            <div class="button-container">
+                <button id="save-session" class="action-button" title="Collects current tabs to organize into sessions">
+                    <img src="imgs/organize_tabs_button.png" alt="Save Current Browser Session">
+                </button>
+            </div>
+            <ul id="tabs-list">
+                <!-- Tab items for the selected session will be populated here -->
+            </ul>
+        </div>
+    </div>
     <script type="module" src="viewer.js"></script>
 </body>
 </html>

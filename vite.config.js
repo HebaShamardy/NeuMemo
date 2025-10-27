@@ -3,6 +3,7 @@ import { resolve, basename } from 'path';
 import fs from 'fs';
 import wasm from 'vite-plugin-wasm';
 import topLevelAwait from 'vite-plugin-top-level-await';
+import { viteStaticCopy } from 'vite-plugin-static-copy';
 
 // Vite config tailored for a Chrome extension in `src/`.
 // - keeps predictable filenames for manifest and entries
@@ -11,7 +12,15 @@ import topLevelAwait from 'vite-plugin-top-level-await';
 export default defineConfig({
   plugins: [
     wasm(),
-    topLevelAwait()
+    topLevelAwait(),
+    viteStaticCopy({
+      targets: [
+        {
+          src: 'src/imgs',
+          dest: '.'
+        }
+      ]
+    })
   ],
   build: {
     outDir: 'dist',
