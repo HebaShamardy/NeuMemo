@@ -45,7 +45,8 @@ async function collectAndSummarizeAllTabs() {
     const aiResults = await summarizeTabs(validTabs);
     console.log('🤖 Full AI Response:', JSON.stringify(aiResults));
     // 4. Save the results to IndexedDB
-    await saveAISummaries(aiResults);
+    const titles = Object.fromEntries(validTabs.map(t => [t.url, t.title]));
+    await saveAISummaries(aiResults, titles);
     console.log(`✅ Successfully saved AI summaries for ${aiResults.length} tabs.`);
 
   } catch (error) {
@@ -161,71 +162,61 @@ function saveRejectedTab(url, reason) {
 }
 
 // Save AI-produced summaries (array of objects that contain at least tab_id)
-function saveAISummaries(summaries) {
-  const DB_NAME = "NeuMemoDB";
-  const STORE_NAME = "tabs";
+async function saveAISummaries(aiResults, tabTitles) {
+    const DB_NAME = "NeuMemoDB";
+    const DB_VERSION = 5;
+    const SESSIONS_STORE = "sessions";
+    const TABS_STORE = "tabs";
 
-  function openAndEnsureStore() {
-    return new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME);
-
-      req.onerror = (e) => reject(e.target.error);
-      req.onupgradeneeded = (e) => {
-        const db = e.target.result;
-        if (!db.objectStoreNames.contains(STORE_NAME)) {
-          db.createObjectStore(STORE_NAME, { keyPath: "url" });
-        }
-      };
-      req.onsuccess = (e) => {
-        const db = e.target.result;
-        if (db.objectStoreNames.contains(STORE_NAME)) {
-          return resolve(db);
-        }
-        const newVersion = db.version + 1;
-        db.close();
-        const req2 = indexedDB.open(DB_NAME, newVersion);
-        req2.onerror = (ev) => reject(ev.target.error);
-        req2.onupgradeneeded = (ev) => {
-          const upgradeDb = ev.target.result;
-          if (!upgradeDb.objectStoreNames.contains(STORE_NAME)) {
-            upgradeDb.createObjectStore(STORE_NAME, { keyPath: "url" });
-          }
-        };
-        req2.onsuccess = (ev) => resolve(ev.target.result);
-      };
+    const db = await new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        request.onerror = e => reject(e.target.error);
+        request.onsuccess = e => resolve(e.target.result);
+        // onupgradeneeded is handled in viewer.js, so it should be up-to-date
     });
-  }
 
-  return new Promise((resolve, reject) => {
-    openAndEnsureStore()
-      .then((db) => {
-        const tx = db.transaction(STORE_NAME, "readwrite");
-        const store = tx.objectStore(STORE_NAME);
-        try {
-          for (const s of summaries) {
-            const url = s.tab_id || s.url || s.tabId;
-            if (!url) continue;
-            store.put({
-              url,
-              session_name: s.session_name || null,
-              summarized_content: s.summarized_content || null,
-              timestamp: new Date().toISOString(),
+    const sessions = {}; // Cache for session names to avoid duplicate DB lookups
+    const sessionTx = db.transaction(SESSIONS_STORE, "readwrite");
+    const sessionStore = sessionTx.objectStore(SESSIONS_STORE);
+    
+    // Pre-load existing sessions
+    await new Promise(resolve => {
+        sessionStore.index("name").openCursor().onsuccess = event => {
+            const cursor = event.target.result;
+            if (cursor) {
+                sessions[cursor.value.name] = cursor.value.id;
+                cursor.continue();
+            } else {
+                resolve();
+            }
+        };
+    });
+
+    for (const result of aiResults) {
+        const sessionName = result.session_name;
+        let sessionId = sessions[sessionName];
+
+        if (!sessionId) {
+            sessionId = await new Promise((resolve, reject) => {
+                const addReq = sessionStore.add({ name: sessionName });
+                addReq.onsuccess = e => {
+                    sessions[sessionName] = e.target.result;
+                    resolve(e.target.result);
+                };
+                addReq.onerror = e => reject(e.target.error);
             });
-          }
-        } catch (err) {
-          db.close();
-          return reject(err);
         }
 
-        tx.oncomplete = () => {
-          db.close();
-          resolve();
-        };
-        tx.onerror = (ev) => {
-          db.close();
-          reject(ev.target ? ev.target.error : ev);
-        };
-      })
-      .catch((err) => reject(err));
-  });
+        const tabTx = db.transaction(TABS_STORE, "readwrite");
+        const tabStore = tabTx.objectStore(TABS_STORE);
+        tabStore.put({
+            sessionId: sessionId,
+            url: result.tab_id,
+            title: tabTitles[result.tab_id] || "Untitled",
+            summary: result.summarized_content,
+            timestamp: new Date().toISOString(),
+        });
+    }
+    
+    db.close();
 }

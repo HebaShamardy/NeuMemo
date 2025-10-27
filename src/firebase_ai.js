@@ -32,6 +32,7 @@ const responseSchema = Schema.array({
         items: Schema.object({
                 properties: {
                         tab_id: Schema.string(),
+                        title: Schema.string(),
                         session_name: Schema.string(),
                         summarized_content: Schema.string(),
                 }
