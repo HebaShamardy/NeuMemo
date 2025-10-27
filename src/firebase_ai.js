@@ -29,52 +29,89 @@ const ai = getAI(firebaseApp, { backend: new GoogleAIBackend() });
 // The model will return an ARRAY of tab objects. Each item follows the
 // structure defined below.
 const responseSchema = Schema.array({
-    items: Schema.object({
-        properties: {
-            tab_id: Schema.string(),
-            language: Schema.string(),
-            title: Schema.string(),
-            summarized_content: Schema.string(),
-            tags: Schema.array({ items: Schema.string() }),
-            main_class: Schema.string(),
-            classes: Schema.array({ items: Schema.string() })
-        }
-    })
+        items: Schema.object({
+                properties: {
+                        tab_id: Schema.string(),
+                        session_name: Schema.string(),
+                        summarized_content: Schema.string(),
+                }
+        })
 });
+const promptTemplate = `You're an AI session manager for browser tabs.
+
+You will receive multiple website tabs as input.  
+Each tab is separated by the token <NEMO_tab> and includes:
+- url
+- title
+- content (the webpage text or body)
+
+Your goal:
+1. Analyze all tabs together to detect related topics or user intents.
+2. **Group related tabs into shared sessions** — tabs discussing the same subject, product, technology, or goal must share the same session name.
+   - Merge closely related topics under one common \`session_name\`.
+   - Prefer reusing concise session names instead of creating new ones.
+   - Example: Tabs about Gemini API, Prompt API, and Firebase AI Logic can all share a session like “Gemini and Chrome AI Development.”
+3. Assign each tab to the most relevant \`session_name\`.
+4. Generate a **detailed factual summary** that captures important concepts, sections, or highlights for future search use.
+
+### Output format (strict JSON array):
+[
+  {
+    "tab_id": "<url>",
+    "session_name": "<shared_topic_or_goal>",
+    "summarized_content": "<informative summary capturing key ideas and sections>"
+  },
+  ...
+]
+
+### Output rules:
+- Output only valid JSON.
+- Tabs covering the same topic or workflow **must share the same session_name**.
+- Summaries should capture meaningful sections and important context (3–6 sentences).
+- Be factual, structured, and concise.
+`;
+
+const getModelConfig = () => ({
+    mode: InferenceMode.PREFER_ON_DEVICE,
+    model: "gemini-2.5-pro",
+    generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: responseSchema,
+        // Using a lower temperature for more predictable, structured JSON output.
+        temperature: 1.0,
+        stopSequences: ["]```"],
+        topP: 1.0,
+        // Stop generation when the closing bracket of the array is found.
+        candidateCount: 1,
+    },
+});
+
 // Create a `GenerativeModel` instance (lazy-created/re-creatable)
-// Set the mode, for example to use on-device model when possible
-let model = getGenerativeModel(ai,
-    {
-        mode: InferenceMode.PREFER_ON_DEVICE,
-        model: "gemini-2.5-pro",
-        // In the generation config, set the `responseMimeType` to `application/json`
-        // and pass the JSON schema object into `responseSchema`.
-        generationConfig: {
-            responseMimeType: "application/json",
-            responseSchema: responseSchema
-        },
-    });
+let model = getGenerativeModel(ai, getModelConfig());
 
 function recreateModel() {
     // Recreate the generative model instance. Useful if the previous
     // execution session was destroyed or otherwise became invalid.
-    model = getGenerativeModel(ai,
-        {
-            mode: InferenceMode.PREFER_ON_DEVICE,
-            model: "gemini-2.5-pro",
-            // In the generation config, set the `responseMimeType` to `application/json`
-            // and pass the JSON schema object into `responseSchema`.
-            generationConfig: {
-                responseMimeType: "application/json",
-                responseSchema: responseSchema
-            },
-        });
+    model = getGenerativeModel(ai, getModelConfig());
 }
 
 // Imports + initialization of FirebaseApp and backend service + creation of model instance
 
 
 // ... existing code ...
+
+function normalizeContent(content) {
+    if (!content) {
+        return '';
+    }
+    // Trim leading/trailing whitespace.
+    let cleanedContent = content.trim();
+
+    // Replace multiple newlines (3 or more) with just two.
+    cleanedContent = cleanedContent.replace(/(\r\n|\r|\n){3,}/g, '\n\n');
+
+    return cleanedContent;
+}
 
 async function summarizeTabs(tabs, maxTokens = 1000000) {
     if (!Array.isArray(tabs)) {
@@ -85,50 +122,7 @@ async function summarizeTabs(tabs, maxTokens = 1000000) {
 
     let tabsInput = '';
     let tabsInPrompt = 0;
-    
-    // First, calculate how many tabs can fit and build the input string.
-    // We start with a temporary token count for the prompt that will be added later.
-    const promptTemplate = `Task: You are a session manager AI for browser tabs.
-
-Input:
-You will receive TABS_COUNT tabs separated by the token <NEMO_tab>.  
-Each tab includes its:
-- Title  
-- URL  
-- Document body inner text (page content)
-
-Goal:
-Analyze each tab separately and return a JSON array containing exactly TABS_COUNT tab objects.
-
-Each tab object must follow this structure:
-{
-  "tab_id": "url",
-  "language": <detected_language>,
-  "title": "<page_title>",
-  "summarized_content": <detailed_summary_representing_all_major_topics_and_sections_of_the_page>,
-  "tags": <list_of_relevant_keywords>,
-  "main_class": <main_generic_class e.g. "technology", "politics", "social", "shopping", "education", "entertainment", "health", "finance">,
-  "classes": <list_of_additional_related_classes>
-}
-
-Rules:
-- Detect the main language of each tab and generate all values in that language.
-- The "summarized_content" must reflect **all key sections** and **informational points** from the tab (not just a short overview).
-  - Capture the purpose, structure, instructions, and main ideas of the page.
-  - Prioritize factual and topic-rich information over navigation or UI text.
-  - Keep it readable, factual, and ready for later full-text search or recall.
-- Tags: 5–10 short, meaningful keywords relevant for future retrieval.
-- main_class: one broad category representing the tab’s main domain.
-- classes: additional topical or contextual categories (e.g. “developer docs”, “AI tools”, “reference guide”).
-- Output only valid JSON — no explanations, no <tab> markers, no prose outside JSON.
-- Each tab is processed independently.
-
-In the end, re-check the correctness of the JSON structure and ensure it matches the specified schema exactly.
-`;
-    // A rough estimation for the prompt template itself, excluding the tabs content.
-    // This is not perfect but gives us a buffer.
-    let totalTokens = encoding.encode(promptTemplate).length;
-
+    let totalTokens = 0;
 
     for (const t of tabs) {
         const tabHeader = `\n<NEMO_tab>\nTitle: ${t.title}\nURL: ${t.url}\nContent: `;
@@ -140,14 +134,15 @@ In the end, re-check the correctness of the JSON structure and ensure it matches
         }
 
         let availableTokens = maxTokens - totalTokens - headerTokens;
-        let contentTokens = encoding.encode(t.content || '');
+        const normalizedContent = normalizeContent(t.content);
+        let contentTokens = encoding.encode(normalizedContent);
         
         let truncatedContent;
         if (contentTokens.length > availableTokens) {
             truncatedContent = new TextDecoder().decode(encoding.decode(contentTokens.slice(0, availableTokens)));
             console.warn(`Content for tab ${t.url} was truncated to fit within the token limit.`);
         } else {
-            truncatedContent = t.content || '';
+            truncatedContent = normalizedContent;
         }
 
         const finalTabString = `${tabHeader}${truncatedContent}`;
@@ -159,10 +154,8 @@ In the end, re-check the correctness of the JSON structure and ensure it matches
     console.log(`📊 Prompt includes ${tabsInPrompt} of ${tabs.length} tabs provided.`);
     console.log(`📊 Final prompt token count: ${totalTokens}`);
 
-    // Now, construct the final prompt with the exact number of tabs.
-    const finalPrompt = `${promptTemplate.replace(/TABS_COUNT/g, tabsInPrompt)}${tabsInput}\n\nPlease output ONLY the JSON array of tab objects (no surrounding text).`;
-
-    // console.log("📝 Full AI Request Prompt:", finalPrompt);
+    const finalPrompt = `${promptTemplate}\n${tabsInput}\n\nPlease output ONLY the JSON array of tab objects (no surrounding text).`;
+    console.log("📝 Full AI Request Prompt:", finalPrompt);
 
     const request = {
         contents: [
@@ -170,16 +163,63 @@ In the end, re-check the correctness of the JSON structure and ensure it matches
         ]
     };
 
-    const result = await model.generateContent(request);
-    let responseText = result.response.text();
-    const cleaned = responseText.trim().replace(/^```json/, '').replace(/```$/,'').trim();
-    const parsed = JSON.parse(cleaned);
+    try {
+        const result = await model.generateContent(request);
+        let responseText = result.response.text();
+        console.log("🤖 Raw AI Response:", responseText);
+        let cleaned = responseText.trim().replace(/^```json/, '').replace(/```$/,'').trim();
 
-    if (!Array.isArray(parsed)) {
-        throw new Error('AI response was not an array');
+        try {
+            // First attempt to parse the cleaned response
+            const parsed = JSON.parse(cleaned);
+            if (!Array.isArray(parsed)) {
+                throw new Error('AI response was not an array');
+            }
+            return parsed;
+
+        } catch (jsonError) {
+            console.warn("⚠️ JSON parsing failed. Attempting to have the model fix it.", jsonError.message);
+
+            // Build a multi-turn fix-up request preserving context and reinforcing correctness.
+            const fixupInstruction = `Regenerate the JSON to be complete for all TABS_COUNT tabs and include the actual data extracted from each tab.
+Do not output placeholder null values unless the information truly does not exist.
+Return only a valid JSON array with exactly TABS_COUNT objects that match the schema and rules described above.`.replace(/TABS_COUNT/g, String(tabsInPrompt));
+
+            const fixupRequest = {
+                contents: [
+                    // Re-send the instructions at the start of the conversation
+                    { role: 'user', parts: [{ text: promptTemplate }] },
+                    // Re-send the original tabs input so the model has full context
+                    { role: 'user', parts: [{ text: `Original tabs input (TABS_COUNT=${tabsInPrompt}):\n${tabsInput}` }] },
+                    // Provide the model's previous (broken) response
+                    { role: 'model', parts: [{ text: cleaned }] },
+                    // Final instruction to regenerate fully populated, valid JSON
+                    { role: 'user', parts: [{ text: fixupInstruction }] }
+                ]
+            };
+
+            console.log("🔧 Sending fix-up request to the model...");
+            const fixupResult = await model.generateContent(fixupRequest);
+            const fixedResponseText = fixupResult.response.text();
+            console.log("🤖 Corrected AI Response:", fixedResponseText);
+            
+            const fixedCleaned = fixedResponseText.trim().replace(/^```json/, '').replace(/```$/,'').trim();
+            
+            try {
+                const parsed = JSON.parse(fixedCleaned);
+                if (!Array.isArray(parsed)) {
+                    throw new Error('Corrected AI response was not an array');
+                }
+                return parsed;
+            } catch (finalJsonError) {
+                console.error("❌ JSON fix-up also failed. Returning empty array.", finalJsonError.message);
+                return []; // Return empty array if the fix-up also fails
+            }
+        }
+    } catch (error) {
+        console.error("❌ Error during AI content generation or parsing. The model's response may have been invalid or truncated.", error);
+        return []; // Return empty array on catastrophic failure
     }
-
-    return parsed;
 }
 
 // NOTE: do not auto-run the sample on module load. Extensions have strict
