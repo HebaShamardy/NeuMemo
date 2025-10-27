@@ -46,32 +46,29 @@ Each tab is separated by the token <NEMO_tab> and includes:
 - content (the webpage text or body)
 
 Your goal:
-1. **Analyze all tabs together** to detect related topics or user intents.
-2. **Group tabs into logical sessions** — each \`session_name\` should describe a clear, specific theme or purpose (e.g. “Firebase Security Rules Setup”, “Comparing Travel Insurance Plans”, “AI Note-Taking Tools”).
-3. **Assign each tab** to a \`session_name\` matching its topic group.
-4. **Generate a detailed, factual summary** that captures the key sections, important information, and main ideas of the page.
-     - Include relevant highlights, steps, or insights.
-     - Exclude ads, menus, or generic UI text.
-
----
+1. Analyze all tabs together to detect related topics or user intents.
+2. **Group related tabs into shared sessions** — tabs discussing the same subject, product, technology, or goal must share the same session name.
+   - Merge closely related topics under one common \`session_name\`.
+   - Prefer reusing concise session names instead of creating new ones.
+   - Example: Tabs about Gemini API, Prompt API, and Firebase AI Logic can all share a session like “Gemini and Chrome AI Development.”
+3. Assign each tab to the most relevant \`session_name\`.
+4. Generate a **detailed factual summary** that captures important concepts, sections, or highlights for future search use.
 
 ### Output format (strict JSON array):
 [
-    {
-        "tab_id": "<url>",
-        "session_name": "<logical_topic_group>",
-        "summarized_content": "<informative summary capturing key ideas and sections>"
-    },
-    ...
+  {
+    "tab_id": "<url>",
+    "session_name": "<shared_topic_or_goal>",
+    "summarized_content": "<informative summary capturing key ideas and sections>"
+  },
+  ...
 ]
 
----
-
 ### Output rules:
-- Output **only valid JSON**, no explanations or extra text.
-- Tabs under the same theme must share the same \`session_name\`.
-- Summaries should be long enough for future search recall (not too short, around 3–6 sentences if content allows).
-- Be factual, clear, and well-structured.
+- Output only valid JSON.
+- Tabs covering the same topic or workflow **must share the same session_name**.
+- Summaries should capture meaningful sections and important context (3–6 sentences).
+- Be factual, structured, and concise.
 `;
 
 const getModelConfig = () => ({
