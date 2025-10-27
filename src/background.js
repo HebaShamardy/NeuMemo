@@ -207,12 +207,8 @@ function saveAISummaries(summaries) {
             if (!url) continue;
             store.put({
               url,
-              title: s.title || null,
+              session_name: s.session_name || null,
               summarized_content: s.summarized_content || null,
-              language: s.language || null,
-              tags: s.tags || null,
-              main_class: s.main_class || null,
-              classes: s.classes || null,
               timestamp: new Date().toISOString(),
             });
           }

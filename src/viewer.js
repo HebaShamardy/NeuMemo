@@ -23,15 +23,13 @@ function populateTable(tableId, tabs) {
   tabs.forEach(tab => {
     const row = tableBody.insertRow();
     if (tableId === 'collected-tabs') {
-        row.insertCell(0).textContent = tab.title;
+        // Session Name column first to match viewer.html header
+        row.insertCell(0).textContent = tab.session_name || '';
+        // URL (clickable)
         const urlCell = row.insertCell(1);
         urlCell.innerHTML = `<a href="${tab.url}" target="_blank" rel="noopener noreferrer">${tab.url}</a>`;
+        // Summary
         row.insertCell(2).textContent = tab.summarized_content || '';
-        row.insertCell(3).textContent = tab.language || '';
-        row.insertCell(4).textContent = (tab.tags || []).join(', ');
-        row.insertCell(5).textContent = tab.main_class || '';
-        row.insertCell(6).textContent = (tab.classes || []).join(', ');
-        row.insertCell(7).textContent = tab.timestamp;
     } else { // rejected-tabs
         const urlCell = row.insertCell(0);
         urlCell.innerHTML = `<a href="${tab.url}" target="_blank" rel="noopener noreferrer">${tab.url}</a>`;
