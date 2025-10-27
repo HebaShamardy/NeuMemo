@@ -156,14 +156,26 @@ body {
     text-decoration: underline;
 }
 
+.tab-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+}
+
 .tab-actions button {
-    margin-left: 10px;
+    margin-bottom: 5px;
     background: none;
     border: 1px solid var(--secondary-color);
     color: var(--secondary-color);
     padding: 5px 10px;
     border-radius: 3px;
     cursor: pointer;
+    width: 80px;
+    text-align: center;
+}
+
+.tab-actions button:last-child {
+    margin-bottom: 0;
 }
 
 .tab-actions button:hover {
