@@ -8,9 +8,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ status: "Collection process initiated." });
     return false;
   }
+  if (message.type === "SEARCH_TABS") {
+    console.log("🧠 Received search tabs request. Starting the process...");
+    searchTabsLite(message.query, message.tabs).then(tabs => {
+        sendResponse({ tabs: tabs });
+    });
+    return true; // Indicates that the response is sent asynchronously
+  }
   // The TAB_CONTENT message is now handled by chrome.tabs.sendMessage,
   // which resolves a promise inside injectAndGetContent. This simplifies the logic immensely.
 });
+
+async function searchTabsLite(query, tabs) {
+    try {
+        const response = await summarizeTabsLiteBatch(tabs, `Based on the query "${query}", filter the following tabs.`);
+        return response;
+    } catch (e) {
+        console.error("Error during tab search:", e);
+        return [];
+    }
+}
 
 async function collectAndSummarizeAllTabs() {
   try {

@@ -10,6 +10,7 @@ document.addEventListener("DOMContentLoaded", () => {
         loadSessions();
         document.getElementById("save-session").addEventListener("click", saveCurrentSession);
         document.getElementById("new-session").addEventListener("click", createNewSession);
+        document.getElementById("search-input").addEventListener("keydown", handleSearch);
     });
     initResizeableSidebar();
 });
@@ -167,6 +168,11 @@ function loadSessions() {
 }
 
 function loadTabsForSession(sessionId) {
+    const searchInput = document.getElementById("search-input");
+    if (searchInput.value.trim().length > 0) {
+        // If there is a search query, don't load session tabs
+        return;
+    }
     const transaction = db.transaction(TABS_STORE, "readonly");
     const store = transaction.objectStore(TABS_STORE);
     const index = store.index("sessionId");
@@ -210,6 +216,74 @@ function loadTabsForSession(sessionId) {
             tabsList.appendChild(li);
         });
     };
+}
+
+async function handleSearch(event) {
+    if (event.key !== 'Enter') {
+        return;
+    }
+    const query = event.target.value.trim();
+    if (query.length === 0) {
+        // If query is empty, load tabs for the selected session
+        const activeSession = document.querySelector("#sessions-list li.active");
+        if (activeSession) {
+            loadTabsForSession(parseInt(activeSession.dataset.sessionId));
+        }
+        return;
+    }
+
+    const allTabs = await getAllTabs();
+    
+    chrome.runtime.sendMessage({ type: "SEARCH_TABS", query: query, tabs: allTabs }, (response) => {
+        if (chrome.runtime.lastError) {
+            console.error("Error sending search message:", chrome.runtime.lastError);
+            return;
+        }
+        displaySearchedTabs(response.tabs);
+    });
+}
+
+function displaySearchedTabs(tabs) {
+    const tabsList = document.getElementById("tabs-list");
+    tabsList.innerHTML = "";
+
+    if (!tabs) {
+        return;
+    }
+
+    tabs.forEach(tab => {
+        const li = document.createElement("li");
+        const tabLink = document.createElement("a");
+        tabLink.href = tab.url;
+        tabLink.textContent = tab.title || tab.url;
+        tabLink.target = "_blank";
+        
+        const tabSummary = document.createElement("p");
+        tabSummary.textContent = tab.summary || '';
+        
+        const tabContent = document.createElement('div');
+        tabContent.appendChild(tabLink);
+        tabContent.appendChild(tabSummary);
+        
+        li.appendChild(tabContent);
+        tabsList.appendChild(li);
+    });
+}
+
+function getAllTabs() {
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(TABS_STORE, "readonly");
+        const store = transaction.objectStore(TABS_STORE);
+        const request = store.getAll();
+
+        request.onsuccess = (event) => {
+            resolve(event.target.result);
+        };
+
+        request.onerror = (event) => {
+            reject(event.target.error);
+        };
+    });
 }
 
 function saveCurrentSession() {

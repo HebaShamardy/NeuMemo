@@ -286,7 +286,7 @@ export { recreateModel };
  * @param {{title: string, url: string, content: string}} tab
  * @param {number} [maxInputTokens=6000] - Max input tokens passed to the lite model
  */
-export async function summarizeTabsLiteBatch(tabs, perTabMaxTokens = 1000) {
+export async function summarizeTabsLiteBatch(tabs, customInstruction = "", perTabMaxTokens = 1000) {
     if (!Array.isArray(tabs) || tabs.length === 0) return [];
     try {
         const encoding = get_encoding("cl100k_base");
@@ -295,8 +295,13 @@ export async function summarizeTabsLiteBatch(tabs, perTabMaxTokens = 1000) {
             "For each input tab, return JSON ONLY as an array of objects: { url: string, summary: string }.",
             "Each summary should be concise, factual, 4-8 sentences, no markdown, no lists unless necessary.",
             "Match each output object's url exactly to the input URL.",
-            "Input tabs follow with delimiters; do not include the inputs in your output.",
         ];
+
+        if (customInstruction) {
+            promptParts.push(customInstruction);
+        }
+
+        promptParts.push("Input tabs follow with delimiters; do not include the inputs in your output.");
 
         for (const t of tabs) {
             const title = t?.title || "Untitled";
