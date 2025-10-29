@@ -1,4 +1,4 @@
-import { summarizeTabs } from './firebase_ai.js';
+import { summarizeTabs, summarizeTabsLiteBatch } from './firebase_ai.js';
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "COLLECT_TABS") {
     console.log("🧠 Received collect tabs request. Starting the process...");
@@ -44,6 +44,37 @@ async function collectAndSummarizeAllTabs() {
     const historicalTabs = await fetchHistoricalTabsFromDB();
     console.log(`📚 Loaded ${historicalTabs.length} historical tabs from DB.`);
 
+    // 3.5 Pre-summarize current tabs that are NOT in history using lite model (batched)
+    const historyUrlSet = new Set(historicalTabs.map(t => t.url).filter(Boolean));
+    const toSummarize = validTabs.filter(t => t && t.url && !historyUrlSet.has(t.url));
+    console.log(`🪄 Pre-summarizing ${toSummarize.length} current tab(s) with lite model in batches to save tokens and respect RPM.`);
+
+    const LITE_BATCH_SIZE = 30; // respect ~30 RPM by batching tabs per request
+    const chunks = [];
+    for (let i = 0; i < toSummarize.length; i += LITE_BATCH_SIZE) {
+      chunks.push(toSummarize.slice(i, i + LITE_BATCH_SIZE));
+    }
+
+    const summaryByUrl = {};
+    for (let idx = 0; idx < chunks.length; idx++) {
+      const chunk = chunks[idx];
+      console.log(`🧩 Lite summarization batch ${idx + 1}/${chunks.length} with ${chunk.length} tab(s).`);
+      try {
+        const batchResults = await summarizeTabsLiteBatch(chunk);
+        for (const item of batchResults) {
+          if (item && item.url) summaryByUrl[item.url] = item.summary || '';
+        }
+      } catch (e) {
+        console.warn(`Lite summarization failed for batch ${idx + 1}:`, String(e));
+      }
+    }
+    const summarizedCurrentTabs = validTabs.map(t => {
+      if (!t || !t.url) return t;
+      if (historyUrlSet.has(t.url)) return t; // will be skipped by history preference later
+      const s = summaryByUrl[t.url];
+      return s && s.length > 0 ? { ...t, content: s } : t;
+    });
+
     // 4. Merge and de-duplicate by URL.
     // Prioritize historical DB entries over current open tabs because
     // historical entries already contain summaries (saving prompt tokens).
@@ -55,7 +86,7 @@ async function collectAndSummarizeAllTabs() {
     }
 
     let skippedCurrentBecauseHistory = 0;
-    for (const t of validTabs) {
+    for (const t of summarizedCurrentTabs) {
       if (t && t.url) {
         if (byUrl.has(t.url)) {
           // A historical entry exists for this URL; keep it and skip the current tab

@@ -73,6 +73,40 @@ const getModelConfig = () => ({
 // Create a `GenerativeModel` instance
 let model = getGenerativeModel(ai, getModelConfig());
 
+// --- Lite Model Config & Instance (for per-tab pre-summaries) ---
+const liteResponseSchema = Schema.array({
+    items: Schema.object({
+        properties: {
+            url: Schema.string(),
+            summary: Schema.string(),
+        }
+    })
+});
+
+const getLiteModelConfig = () => ({
+    mode: InferenceMode.PREFER_ON_DEVICE,
+    inCloudParams: {
+        model: "gemini-2.0-flash-lite",
+        generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema: liteResponseSchema,
+            temperature: 0,
+            maxOutputTokens: 2048,
+            candidateCount: 1,
+        },
+    },
+    onDeviceParams: {
+        // Enforce JSON shape on-device as well
+        promptOptions: {
+            responseConstraint: liteResponseSchema,
+        },
+        // Keep it deterministic
+        createOptions: { temperature: 0 },
+    }
+});
+
+let liteModel = getGenerativeModel(ai, getLiteModelConfig());
+
 /**
  * Recreates the generative model instance.
  */
@@ -245,3 +279,71 @@ async function summarizeTabs(tabs, maxTokens = 200000) {
 
 export { summarizeTabs };
 export { recreateModel };
+
+/**
+ * Quickly summarizes a single tab's content using the lite model to save tokens.
+ * Returns a short plain-text summary. If it fails, returns an empty string.
+ * @param {{title: string, url: string, content: string}} tab
+ * @param {number} [maxInputTokens=6000] - Max input tokens passed to the lite model
+ */
+export async function summarizeTabsLiteBatch(tabs, perTabMaxTokens = 1000) {
+    if (!Array.isArray(tabs) || tabs.length === 0) return [];
+    try {
+        const encoding = get_encoding("cl100k_base");
+        let promptParts = [
+            "You are a helpful assistant that summarizes multiple web pages.",
+            "For each input tab, return JSON ONLY as an array of objects: { url: string, summary: string }.",
+            "Each summary should be concise, factual, 4-8 sentences, no markdown, no lists unless necessary.",
+            "Match each output object's url exactly to the input URL.",
+            "Input tabs follow with delimiters; do not include the inputs in your output.",
+        ];
+
+        for (const t of tabs) {
+            const title = t?.title || "Untitled";
+            const url = t?.url || "";
+            const normalized = normalizeContent(t?.content || "");
+            const tokens = encoding.encode(normalized);
+            const truncated = tokens.length > perTabMaxTokens
+                ? new TextDecoder().decode(encoding.decode(tokens.slice(0, perTabMaxTokens)))
+                : normalized;
+            promptParts.push(
+                `\n<NEMO_tab>\nTitle: ${title}\nURL: ${url}\nContent:\n<CONTENT_START>\n${truncated}\n<CONTENT_END>`
+            );
+        }
+
+        const request = {
+            contents: [ { role: 'user', parts: [{ text: promptParts.join("\n") }] } ]
+        };
+
+        const result = await liteModel.generateContent(request);
+        const text = (result?.response?.text?.() || "").trim();
+        let parsed;
+        try {
+            parsed = JSON.parse(text);
+            if (!Array.isArray(parsed)) throw new Error("Lite response was not an array");
+        } catch (e) {
+            console.error("❌ Lite JSON parsing failed.", e?.message, "Response was:", text);
+            return [];
+        }
+        // Ensure minimal shape and dedupe by URL (last wins)
+        const byUrl = new Map();
+        for (const item of parsed) {
+            if (item && typeof item.url === 'string') {
+                byUrl.set(item.url, {
+                    url: item.url,
+                    summary: typeof item.summary === 'string' ? item.summary : "",
+                });
+            }
+        }
+        return Array.from(byUrl.values());
+    } catch (e) {
+        console.warn("Lite batch summarization failed:", String(e));
+        return [];
+    }
+}
+
+// Backwards-compat: single-tab helper using the batch function
+export async function summarizeTabLite(tab, perTabMaxTokens = 1000) {
+    const res = await summarizeTabsLiteBatch([tab], perTabMaxTokens);
+    return res[0]?.summary || "";
+}
