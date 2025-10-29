@@ -66,11 +66,22 @@ Your goal:
 ]
 
 ### Output rules:
-- Output only valid JSON.
+- Output only valid JSON that parses with JSON.parse.
 - Tabs covering the same topic or workflow **must share the same session_name**.
 - Summaries should capture meaningful sections and important context (3–6 sentences).
 - Be factual, structured, and concise.
-`;
+
+### Strict formatting requirements:
+- Respond with ONLY a single JSON array. No prose, no explanations, no markdown, no code fences.
+- Escape internal double quotes in string values.
+- Do not include trailing commas.
+- Ensure the final character of the response is a closing bracket: "]".
+- Before sending your answer, silently self-check that the JSON is complete and valid.
+- Delimit your final output by writing exactly this token before and after the JSON:
+    <<<JSON_START>>>
+    [ ... JSON array ... ]
+    <<<JSON_END>>>
+Return only those three lines (marker, JSON array, marker).`;
 
 const getModelConfig = () => ({
     mode: InferenceMode.PREFER_ON_DEVICE,
@@ -78,11 +89,11 @@ const getModelConfig = () => ({
     generationConfig: {
         responseMimeType: "application/json",
         responseSchema: responseSchema,
-        // Using a lower temperature for more predictable, structured JSON output.
-        temperature: 1.0,
-        stopSequences: ["]```"],
+        // Use a low temperature for predictable, structured JSON output.
+        temperature: 0.2,
         topP: 1.0,
-        // Stop generation when the closing bracket of the array is found.
+        // Allow a large enough output to avoid truncation mid-JSON.
+        maxOutputTokens: 65000,
         candidateCount: 1,
     },
 });
@@ -155,7 +166,7 @@ async function summarizeTabs(tabs, maxTokens = 1000000) {
     console.log(`📊 Prompt includes ${tabsInPrompt} of ${tabs.length} tabs provided.`);
     console.log(`📊 Final prompt token count: ${totalTokens}`);
 
-    const finalPrompt = `${promptTemplate}\n${tabsInput}\n\nPlease output ONLY the JSON array of tab objects (no surrounding text).`;
+    const finalPrompt = `${promptTemplate}\n${tabsInput}\n\nThere are exactly ${tabsInPrompt} tabs above.\n- Return exactly ${tabsInPrompt} objects (one per tab) in the JSON array.\n- Output must be wrapped between <<<JSON_START>>> and <<<JSON_END>>> markers, with nothing else.`;
     console.log("📝 Full AI Request Prompt:", finalPrompt);
 
     const request = {
@@ -168,7 +179,26 @@ async function summarizeTabs(tabs, maxTokens = 1000000) {
         const result = await model.generateContent(request);
         let responseText = result.response.text();
         console.log("🤖 Raw AI Response:", responseText);
-        let cleaned = responseText.trim().replace(/^```json/, '').replace(/```$/,'').trim();
+        // Prefer extracting between explicit markers; fall back to fenced cleanup.
+        let cleaned = (() => {
+            const start = responseText.indexOf('<<<JSON_START>>>');
+            const end = responseText.lastIndexOf('<<<JSON_END>>>');
+            if (start !== -1 && end !== -1 && end > start) {
+                return responseText
+                    .slice(start + '<<<JSON_START>>>'.length, end)
+                    .trim();
+            }
+            return responseText.trim().replace(/^```json/, '').replace(/```$/,'').trim();
+        })();
+
+        // As a last-resort cleanup, if extra text surrounds the array, keep only the outermost [ ... ]
+        if (!(cleaned.trim().startsWith('[') && cleaned.trim().endsWith(']'))) {
+            const first = cleaned.indexOf('[');
+            const last = cleaned.lastIndexOf(']');
+            if (first !== -1 && last !== -1 && last > first) {
+                cleaned = cleaned.slice(first, last + 1);
+            }
+        }
 
         try {
             // First attempt to parse the cleaned response
@@ -184,7 +214,12 @@ async function summarizeTabs(tabs, maxTokens = 1000000) {
             // Build a multi-turn fix-up request preserving context and reinforcing correctness.
             const fixupInstruction = `Regenerate the JSON to be complete for all TABS_COUNT tabs and include the actual data extracted from each tab.
 Do not output placeholder null values unless the information truly does not exist.
-Return only a valid JSON array with exactly TABS_COUNT objects that match the schema and rules described above.`.replace(/TABS_COUNT/g, String(tabsInPrompt));
+Return only a valid JSON array with exactly TABS_COUNT objects that match the schema and rules described above.
+Strictly follow these rules:
+- Output ONLY a JSON array, no prose or markdown.
+- Escape all internal quotes in string values.
+- Ensure the response ends with a closing bracket "]".
+- Wrap the JSON between <<<JSON_START>>> and <<<JSON_END>>> with nothing else.`.replace(/TABS_COUNT/g, String(tabsInPrompt));
 
             const fixupRequest = {
                 contents: [
@@ -204,7 +239,24 @@ Return only a valid JSON array with exactly TABS_COUNT objects that match the sc
             const fixedResponseText = fixupResult.response.text();
             console.log("🤖 Corrected AI Response:", fixedResponseText);
             
-            const fixedCleaned = fixedResponseText.trim().replace(/^```json/, '').replace(/```$/,'').trim();
+            let fixedCleaned = (() => {
+                const start = fixedResponseText.indexOf('<<<JSON_START>>>');
+                const end = fixedResponseText.lastIndexOf('<<<JSON_END>>>');
+                if (start !== -1 && end !== -1 && end > start) {
+                    return fixedResponseText
+                        .slice(start + '<<<JSON_START>>>'.length, end)
+                        .trim();
+                }
+                return fixedResponseText.trim().replace(/^```json/, '').replace(/```$/,'').trim();
+            })();
+
+            if (!(fixedCleaned.trim().startsWith('[') && fixedCleaned.trim().endsWith(']'))) {
+                const first = fixedCleaned.indexOf('[');
+                const last = fixedCleaned.lastIndexOf(']');
+                if (first !== -1 && last !== -1 && last > first) {
+                    fixedCleaned = fixedCleaned.slice(first, last + 1);
+                }
+            }
             
             try {
                 const parsed = JSON.parse(fixedCleaned);
