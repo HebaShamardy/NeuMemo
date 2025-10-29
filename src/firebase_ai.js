@@ -78,6 +78,7 @@ const liteResponseSchema = Schema.array({
     items: Schema.object({
         properties: {
             url: Schema.string(),
+            title: Schema.string(),
             summary: Schema.string(),
         }
     })
@@ -292,9 +293,9 @@ export async function summarizeTabsLiteBatch(tabs, customInstruction = "", perTa
         const encoding = get_encoding("cl100k_base");
         let promptParts = [
             "You are a helpful assistant that summarizes multiple web pages.",
-            "For each input tab, return JSON ONLY as an array of objects: { url: string, summary: string }.",
+            "For each input tab, return JSON ONLY as an array of objects: { url: string, title: string, summary: string }.",
             "Each summary should be concise, factual, 4-8 sentences, no markdown, no lists unless necessary.",
-            "Match each output object's url exactly to the input URL.",
+            "Match each output object's url and title exactly to the input URL and title.",
         ];
 
         if (customInstruction) {
@@ -336,6 +337,7 @@ export async function summarizeTabsLiteBatch(tabs, customInstruction = "", perTa
             if (item && typeof item.url === 'string') {
                 byUrl.set(item.url, {
                     url: item.url,
+                    title: typeof item.title === 'string' ? item.title : "Untitled",
                     summary: typeof item.summary === 'string' ? item.summary : "",
                 });
             }
