@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Nemo",
+  "name": "NeuMemo (Nemo)",
   "version": "1.0",
   "description": "Your smart session manager.",
   "permissions": [
