@@ -110,6 +110,40 @@ const getLiteModelConfig = () => ({
 
 let liteModel = getGenerativeModel(ai, getLiteModelConfig());
 
+// --- Search-specific schema & model (separate from summarization) ---
+const searchResponseSchema = Schema.array({
+    items: Schema.object({
+        properties: {
+            url: Schema.string(),
+            title: Schema.string(),
+            summary: Schema.string(),
+            score: Schema.number(),
+        }
+    })
+});
+
+const getSearchModelConfig = () => ({
+    mode: InferenceMode.PREFER_ON_DEVICE,
+    inCloudParams: {
+        model: "gemini-2.0-flash-lite",
+        generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema: searchResponseSchema,
+            temperature: 0,
+            maxOutputTokens: 1024,
+            candidateCount: 1,
+        },
+    },
+    onDeviceParams: {
+        promptOptions: {
+            responseConstraint: searchResponseSchema,
+        },
+        createOptions: { temperature: 0 },
+    }
+});
+
+let searchModel = getGenerativeModel(ai, getSearchModelConfig());
+
 /**
  * Recreates the generative model instance.
  */
@@ -316,7 +350,7 @@ export async function summarizeTabsLiteBatch(tabs, customInstruction = "", perTa
             for (const t of chunkTabs) {
                 const title = t?.title || "Untitled";
                 const url = t?.url || "";
-                const normalized = normalizeContent(t?.content || "");
+                const normalized = normalizeContent(t?.content || t?.summary || "");
                 const tokens = encoding.encode(normalized);
                 const truncated = tokens.length > perTabMaxTokens
                     ? new TextDecoder().decode(encoding.decode(tokens.slice(0, perTabMaxTokens)))
@@ -405,4 +439,119 @@ export async function summarizeTabsLiteBatch(tabs, customInstruction = "", perTa
 export async function summarizeTabLite(tab, perTabMaxTokens = 1000) {
     const res = await summarizeTabsLiteBatch([tab], "", perTabMaxTokens);
     return res[0]?.summary || "";
+}
+
+/**
+ * Search for the most relevant tabs to a user query using a dedicated prompt and schema.
+ * Returns 0..topK items globally, aggregated across chunks with scores.
+ * @param {Array<{title:string,url:string,content?:string,summary?:string}>} tabs
+ * @param {string} query
+ * @param {number} [topK=3]
+ * @param {number} [perTabMaxTokens=200]
+ */
+export async function searchRelevantTabs(tabs, query, topK = 3, perTabMaxTokens = 200) {
+    if (!Array.isArray(tabs) || tabs.length === 0) return [];
+    const BATCH_SIZE = 10;
+    const CONCURRENCY = 4;
+    const encoding = get_encoding("cl100k_base");
+
+    const buildPromptForChunk = (chunkTabs) => {
+        const parts = [];
+        parts.push(
+            "You are a retrieval assistant.",
+            `User query: "${query}"`,
+            "Select the most relevant tabs to answer the user's information need.",
+            "Return JSON ONLY as an array of up to K objects with: { url: string, title: string, summary: string, score: number }.",
+            "Constraints:",
+            "- K = " + Math.min(topK, 3),
+            "- score is in [0.0, 1.0], where 1.0 is a perfect semantic match.",
+            "- Sort results by score descending.",
+            "- If none are relevant, return an empty array [].",
+            "- summary: 1-3 sentences explaining the relevant content of the tab (plain text).",
+            "Input tabs follow with delimiters; do not include the inputs themselves in your output."
+        );
+
+        for (const t of chunkTabs) {
+            const title = t?.title || "Untitled";
+            const url = t?.url || "";
+            const normalized = normalizeContent(t?.content || t?.summary || "");
+            const tokens = encoding.encode(normalized);
+            const truncated = tokens.length > perTabMaxTokens
+                ? new TextDecoder().decode(encoding.decode(tokens.slice(0, perTabMaxTokens)))
+                : normalized;
+            parts.push(`\n<NEMO_tab>\nTitle: ${title}\nURL: ${url}\nContent:\n<CONTENT_START>\n${truncated}\n<CONTENT_END>`);
+        }
+        return parts.join("\n");
+    };
+
+    const runChunk = async (chunkTabs) => {
+        const request = {
+            contents: [{ role: 'user', parts: [{ text: buildPromptForChunk(chunkTabs) }] }]
+        };
+        try {
+            const result = await searchModel.generateContent(request);
+            const text = (result?.response?.text?.() || "").trim();
+            let parsed;
+            try {
+                parsed = JSON.parse(text);
+                if (!Array.isArray(parsed)) throw new Error("Search response was not an array");
+            } catch (e) {
+                console.error("❌ Search JSON parsing failed.", e?.message, "Response was:", text);
+                return [];
+            }
+            return parsed
+                .filter(Boolean)
+                .map(item => ({
+                    url: typeof item.url === 'string' ? item.url : "",
+                    title: typeof item.title === 'string' ? item.title : "Untitled",
+                    summary: typeof item.summary === 'string' ? item.summary : "",
+                    score: typeof item.score === 'number' ? item.score : 0,
+                }))
+                .filter(x => x.url);
+        } catch (e) {
+            console.warn("Search chunk failed:", String(e));
+            return [];
+        }
+    };
+
+    // If small, single request
+    if (tabs.length <= BATCH_SIZE) {
+        const results = await runChunk(tabs);
+        return results.sort((a,b) => (b.score||0) - (a.score||0)).slice(0, topK);
+    }
+
+    // Chunk and aggregate top candidates across chunks
+    const chunks = [];
+    for (let i = 0; i < tabs.length; i += BATCH_SIZE) {
+        chunks.push(tabs.slice(i, i + BATCH_SIZE));
+    }
+
+    const mapWithConcurrency = async (items, concurrency, mapper) => {
+        const results = new Array(items.length);
+        let index = 0;
+        const workers = Array(Math.min(concurrency, items.length)).fill(0).map(async () => {
+            while (true) {
+                const current = index++;
+                if (current >= items.length) break;
+                results[current] = await mapper(items[current], current);
+            }
+        });
+        await Promise.all(workers);
+        return results;
+    };
+
+    const chunkResults = await mapWithConcurrency(chunks, CONCURRENCY, runChunk);
+    const byUrl = new Map();
+    for (const arr of chunkResults) {
+        for (const r of (arr || [])) {
+            const existing = byUrl.get(r.url);
+            if (!existing || (r.score || 0) > (existing.score || 0)) {
+                byUrl.set(r.url, r);
+            }
+        }
+    }
+
+    return Array.from(byUrl.values())
+        .sort((a,b) => (b.score||0) - (a.score||0))
+        .slice(0, topK);
 }

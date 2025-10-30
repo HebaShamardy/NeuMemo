@@ -1,4 +1,4 @@
-import { summarizeTabs, summarizeTabsLiteBatch } from './firebase_ai.js';
+import { summarizeTabs, summarizeTabsLiteBatch, searchRelevantTabs } from './firebase_ai.js';
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "COLLECT_TABS") {
     console.log("🧠 Received collect tabs request. Starting the process...");
@@ -20,13 +20,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function searchTabsLite(query, tabs) {
-    try {
-        const response = await summarizeTabsLiteBatch(tabs, `Based on the query "${query}", filter the following tabs.`);
-        return response;
-    } catch (e) {
-        console.error("Error during tab search:", e);
-        return [];
-    }
+  try {
+    const results = await searchRelevantTabs(tabs, query, 3);
+    // searchRelevantTabs returns objects with {url,title,summary,score}. Viewer expects {url,title,summary}.
+    return results.map(({ url, title, summary }) => ({ url, title, summary }));
+  } catch (e) {
+    console.error("Error during tab search:", e);
+    return [];
+  }
 }
 
 async function collectAndSummarizeAllTabs() {
