@@ -13,6 +13,17 @@ document.addEventListener("DOMContentLoaded", () => {
         document.getElementById("search-input").addEventListener("keydown", handleSearch);
     });
     initResizeableSidebar();
+    // Listen for background completion/failure notifications
+    chrome.runtime.onMessage.addListener((message) => {
+        if (message?.type === "COLLECT_TABS_DONE") {
+            showLoading(false);
+            loadSessions();
+        } else if (message?.type === "COLLECT_TABS_FAILED") {
+            showLoading(false);
+            console.warn("Tab collection/summarization failed:", message?.error || "Unknown error");
+            alert("Failed to organize tabs. Please try again.");
+        }
+    });
 });
 
 function initDatabase() {
@@ -120,6 +131,7 @@ function loadSessions() {
             li.appendChild(sessionNameSpan);
 
             li.addEventListener("click", () => {
+                document.getElementById("search-input").value = ""; // Clear search
                 loadTabsForSession(session.id);
                 document.querySelectorAll("#sessions-list li").forEach(item => item.classList.remove("active"));
                 li.classList.add("active");
@@ -234,6 +246,9 @@ async function handleSearch(event) {
 
     const allTabs = await getAllTabs();
     
+    // Unselect any active session
+    document.querySelectorAll("#sessions-list li.active").forEach(item => item.classList.remove("active"));
+
     chrome.runtime.sendMessage({ type: "SEARCH_TABS", query: query, tabs: allTabs }, (response) => {
         if (chrome.runtime.lastError) {
             console.error("Error sending search message:", chrome.runtime.lastError);
@@ -287,14 +302,29 @@ function getAllTabs() {
 }
 
 function saveCurrentSession() {
+    showLoading(true);
     chrome.runtime.sendMessage({ type: "COLLECT_TABS" }, (response) => {
         if (chrome.runtime.lastError) {
             console.error("Error sending collect message:", chrome.runtime.lastError);
+            showLoading(false);
             return;
         }
         console.log(response.status);
-        setTimeout(loadSessions, 2000); // Refresh view
+        // We'll refresh when background notifies COLLECT_TABS_DONE
     });
+}
+
+function showLoading(isLoading) {
+    const overlay = document.getElementById("loading-overlay");
+    const saveBtn = document.getElementById("save-session");
+    if (!overlay) return;
+    if (isLoading) {
+        overlay.classList.remove("hidden");
+        if (saveBtn) saveBtn.disabled = true;
+    } else {
+        overlay.classList.add("hidden");
+        if (saveBtn) saveBtn.disabled = false;
+    }
 }
 
 function createNewSession() {

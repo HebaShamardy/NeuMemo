@@ -64,26 +64,17 @@ async function collectAndSummarizeAllTabs() {
     // 3.5 Pre-summarize current tabs that are NOT in history using lite model (batched)
     const historyUrlSet = new Set(historicalTabs.map(t => t.url).filter(Boolean));
     const toSummarize = validTabs.filter(t => t && t.url && !historyUrlSet.has(t.url));
-    console.log(`🪄 Pre-summarizing ${toSummarize.length} current tab(s) with lite model in batches to save tokens and respect RPM.`);
-
-    const LITE_BATCH_SIZE = 30; // respect ~30 RPM by batching tabs per request
-    const chunks = [];
-    for (let i = 0; i < toSummarize.length; i += LITE_BATCH_SIZE) {
-      chunks.push(toSummarize.slice(i, i + LITE_BATCH_SIZE));
-    }
+    console.log(`🪄 Pre-summarizing ${toSummarize.length} current tab(s) with lite model — auto-batched (5 tabs/request, up to 5 requests concurrently).`);
 
     const summaryByUrl = {};
-    for (let idx = 0; idx < chunks.length; idx++) {
-      const chunk = chunks[idx];
-      console.log(`🧩 Lite summarization batch ${idx + 1}/${chunks.length} with ${chunk.length} tab(s).`);
-      try {
-        const batchResults = await summarizeTabsLiteBatch(chunk);
-        for (const item of batchResults) {
-          if (item && item.url) summaryByUrl[item.url] = item.summary || '';
-        }
-      } catch (e) {
-        console.warn(`Lite summarization failed for batch ${idx + 1}:`, String(e));
+    try {
+      // summarizeTabsLiteBatch now handles batching and concurrency internally
+      const batchResults = await summarizeTabsLiteBatch(toSummarize);
+      for (const item of batchResults) {
+        if (item && item.url) summaryByUrl[item.url] = item.summary || '';
       }
+    } catch (e) {
+      console.warn(`Lite summarization failed:`, String(e));
     }
     const summarizedCurrentTabs = validTabs.map(t => {
       if (!t || !t.url) return t;
@@ -127,9 +118,18 @@ async function collectAndSummarizeAllTabs() {
     const titles = Object.fromEntries(combinedTabs.map(t => [t.url, t.title]));
     await saveAISummaries(aiResults, titles);
     console.log(`✅ Successfully saved AI summaries for ${aiResults.length} tabs.`);
+    // Notify UI pages (e.g., viewer.html) that collection and summarization are complete
+    try {
+      chrome.runtime.sendMessage({ type: "COLLECT_TABS_DONE", count: aiResults.length });
+    } catch (notifyErr) {
+      console.warn("Failed to notify UI about completion:", notifyErr);
+    }
 
   } catch (error) {
     console.error('❌ An error occurred during the collect and summarize process:', error);
+    try {
+      chrome.runtime.sendMessage({ type: "COLLECT_TABS_FAILED", error: String(error?.message || error) });
+    } catch {}
   }
 }
 

@@ -32,7 +32,9 @@ const responseSchema = Schema.array({
 
 // --- Prompt Template ---
 const promptTemplate = `You are an AI tab session manager.
+Your goal is to group tabs into meaningful, thematic sessions.
 Analyze the following tabs and group them into logical sessions.
+The session names should be descriptive and specific, but not so granular that every tab gets its own session. For example, group tabs about 'React Hooks' and 'State Management' into a session called 'React Development', not just 'Development'.
 Assign each tab a \`session_name\` and a factual \`summarized_content\`.
 Tabs with the same topic MUST share the same \`session_name\`.
 The final output must be only a valid JSON array of objects.
@@ -45,7 +47,7 @@ Input tabs:
  */
 const getModelConfig = () => ({
     // Prioritize the cloud model for this large task.
-    mode: InferenceMode.PREFER_IN_CLOUD,
+    mode: InferenceMode.PREFER_ON_DEVICE,
 
     // --- 1. Cloud Model Configuration (Primary) ---
     inCloudParams: {
@@ -290,59 +292,109 @@ export { recreateModel };
 export async function summarizeTabsLiteBatch(tabs, customInstruction = "", perTabMaxTokens = 1000) {
     if (!Array.isArray(tabs) || tabs.length === 0) return [];
     try {
+        // Settings: 5 tabs per request, run up to 5 requests concurrently
+        const BATCH_SIZE = 5;
+        const CONCURRENCY = 5;
+
         const encoding = get_encoding("cl100k_base");
-        let promptParts = [
-            "You are a helpful assistant that summarizes multiple web pages.",
-            "For each input tab, return JSON ONLY as an array of objects: { url: string, title: string, summary: string }.",
-            "Each summary should be concise, factual, 4-8 sentences, no markdown, no lists unless necessary.",
-            "Match each output object's url and title exactly to the input URL and title.",
-        ];
 
-        if (customInstruction) {
-            promptParts.push(customInstruction);
-        }
+        // Helper to build and run a single chunk request
+        const summarizeChunk = async (chunkTabs) => {
+            let promptParts = [
+                "You are a helpful assistant that summarizes multiple web pages.",
+                "For each input tab, return JSON ONLY as an array of objects: { url: string, title: string, summary: string }.",
+                "Each summary should be substantive and information-dense: 8-15 sentences (~150-300 words). Capture main ideas, sections/topics covered, key insights, important entities/terms, and any conclusions. Keep it factual, neutral, and self-contained. No markdown; plain prose only.",
+                "Match each output object's url and title exactly to the input URL and title.",
+            ];
 
-        promptParts.push("Input tabs follow with delimiters; do not include the inputs in your output.");
+            if (customInstruction) {
+                promptParts.push(String(customInstruction));
+            }
 
-        for (const t of tabs) {
-            const title = t?.title || "Untitled";
-            const url = t?.url || "";
-            const normalized = normalizeContent(t?.content || "");
-            const tokens = encoding.encode(normalized);
-            const truncated = tokens.length > perTabMaxTokens
-                ? new TextDecoder().decode(encoding.decode(tokens.slice(0, perTabMaxTokens)))
-                : normalized;
-            promptParts.push(
-                `\n<NEMO_tab>\nTitle: ${title}\nURL: ${url}\nContent:\n<CONTENT_START>\n${truncated}\n<CONTENT_END>`
-            );
-        }
+            promptParts.push("Input tabs follow with delimiters; do not include the inputs in your output.");
 
-        const request = {
-            contents: [ { role: 'user', parts: [{ text: promptParts.join("\n") }] } ]
-        };
+            for (const t of chunkTabs) {
+                const title = t?.title || "Untitled";
+                const url = t?.url || "";
+                const normalized = normalizeContent(t?.content || "");
+                const tokens = encoding.encode(normalized);
+                const truncated = tokens.length > perTabMaxTokens
+                    ? new TextDecoder().decode(encoding.decode(tokens.slice(0, perTabMaxTokens)))
+                    : normalized;
+                promptParts.push(
+                    `\n<NEMO_tab>\nTitle: ${title}\nURL: ${url}\nContent:\n<CONTENT_START>\n${truncated}\n<CONTENT_END>`
+                );
+            }
 
-        const result = await liteModel.generateContent(request);
-        const text = (result?.response?.text?.() || "").trim();
-        let parsed;
-        try {
-            parsed = JSON.parse(text);
-            if (!Array.isArray(parsed)) throw new Error("Lite response was not an array");
-        } catch (e) {
-            console.error("❌ Lite JSON parsing failed.", e?.message, "Response was:", text);
-            return [];
-        }
-        // Ensure minimal shape and dedupe by URL (last wins)
-        const byUrl = new Map();
-        for (const item of parsed) {
-            if (item && typeof item.url === 'string') {
-                byUrl.set(item.url, {
-                    url: item.url,
+            const request = {
+                contents: [ { role: 'user', parts: [{ text: promptParts.join("\n") }] } ]
+            };
+
+            const result = await liteModel.generateContent(request);
+            const text = (result?.response?.text?.() || "").trim();
+            let parsed;
+            try {
+                parsed = JSON.parse(text);
+                if (!Array.isArray(parsed)) throw new Error("Lite response was not an array");
+            } catch (e) {
+                console.error("❌ Lite JSON parsing failed.", e?.message, "Response was:", text);
+                return [];
+            }
+            // Ensure minimal shape
+            return parsed
+                .filter(Boolean)
+                .map(item => ({
+                    url: typeof item.url === 'string' ? item.url : "",
                     title: typeof item.title === 'string' ? item.title : "Untitled",
                     summary: typeof item.summary === 'string' ? item.summary : "",
-                });
+                }))
+                .filter(x => x.url);
+        };
+
+        // Small input optimization: single request path
+        if (tabs.length <= BATCH_SIZE) {
+            return await summarizeChunk(tabs);
+        }
+
+        // Split into chunks of 5
+        const chunks = [];
+        for (let i = 0; i < tabs.length; i += BATCH_SIZE) {
+            chunks.push(tabs.slice(i, i + BATCH_SIZE));
+        }
+
+        // Concurrency-limited mapper
+        const mapWithConcurrency = async (items, concurrency, mapper) => {
+            const results = new Array(items.length);
+            let index = 0;
+            const workers = Array(Math.min(concurrency, items.length)).fill(0).map(async () => {
+                while (true) {
+                    const current = index++;
+                    if (current >= items.length) break;
+                    results[current] = await mapper(items[current], current);
+                }
+            });
+            await Promise.all(workers);
+            return results;
+        };
+
+        // Run up to 5 chunk requests at a time
+        const chunkResults = await mapWithConcurrency(chunks, CONCURRENCY, summarizeChunk);
+
+        // Flatten and dedupe by URL (last wins)
+        const byUrl = new Map();
+        for (const arr of chunkResults) {
+            for (const item of (arr || [])) {
+                byUrl.set(item.url, item);
             }
         }
-        return Array.from(byUrl.values());
+
+        // Return results in the same order as input tabs (by URL), skipping missing
+        const ordered = [];
+        for (const t of tabs) {
+            const found = t?.url ? byUrl.get(t.url) : undefined;
+            if (found) ordered.push(found);
+        }
+        return ordered;
     } catch (e) {
         console.warn("Lite batch summarization failed:", String(e));
         return [];
@@ -351,6 +403,6 @@ export async function summarizeTabsLiteBatch(tabs, customInstruction = "", perTa
 
 // Backwards-compat: single-tab helper using the batch function
 export async function summarizeTabLite(tab, perTabMaxTokens = 1000) {
-    const res = await summarizeTabsLiteBatch([tab], perTabMaxTokens);
+    const res = await summarizeTabsLiteBatch([tab], "", perTabMaxTokens);
     return res[0]?.summary || "";
 }
