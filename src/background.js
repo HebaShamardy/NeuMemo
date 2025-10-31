@@ -82,6 +82,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true; // Indicates that the response is sent asynchronously
   }
+  if (message.type === "GOOGLE_SEARCH_QUERY") {
+    // Determine best historical session matching the query and notify the tab
+    handleGoogleSearchQuery(message.query)
+      .then((result) => {
+        try {
+          if (sender?.tab?.id) {
+            chrome.tabs.sendMessage(sender.tab.id, { type: 'GOOGLE_SEARCH_MATCH', ...result });
+          }
+        } catch {}
+      })
+      .catch((e) => console.warn('Search hint failed:', e));
+    return false;
+  }
+  if (message.type === "OPEN_SESSION_WINDOW") {
+    const id = Number(message.sessionId);
+    if (Number.isFinite(id)) {
+      openSessionInNewWindow(id).catch(e => console.warn('Failed to open session window:', e));
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
   // The TAB_CONTENT message is now handled by chrome.tabs.sendMessage,
   // which resolves a promise inside injectAndGetContent. This simplifies the logic immensely.
 });
@@ -682,5 +703,82 @@ async function saveAISummaries(aiResults, tabTitles) {
 
   } finally {
     db.close();
+  }
+}
+
+// --- Google Search integration helpers ---
+async function handleGoogleSearchQuery(query) {
+  try {
+    if (!query || String(query).trim().length === 0) return { found: false };
+    const historyTabs = await fetchHistoricalTabsFromDB();
+    if (!Array.isArray(historyTabs) || historyTabs.length === 0) return { found: false };
+
+    // Use our search function over historical summaries
+    const results = await searchRelevantTabs(historyTabs, query, 3);
+    if (!results || results.length === 0) return { found: false };
+
+    // Map URL -> sessionId/Name
+    const byUrl = new Map(historyTabs.filter(t => t?.url).map(t => [t.url, t]));
+
+    // Aggregate by session with score
+    const agg = new Map(); // sessionId -> { name, id, total, count, max }
+    for (const r of results) {
+      const meta = byUrl.get(r.url);
+      if (!meta) continue;
+      const sid = typeof meta.sessionId === 'number' ? meta.sessionId : -1;
+      const sname = meta.sessionName || 'Uncategorized';
+      const prev = agg.get(sid) || { id: sid, name: sname, total: 0, count: 0, max: 0 };
+      prev.total += Number(r.score || 0);
+      prev.count += 1;
+      prev.max = Math.max(prev.max, Number(r.score || 0));
+      agg.set(sid, prev);
+    }
+    if (agg.size === 0) return { found: false };
+
+    // Choose best session by total score, tie-breaker by max score
+    const best = Array.from(agg.values()).sort((a, b) => (b.total - a.total) || (b.max - a.max))[0];
+
+    // Apply thresholds to avoid noisy hints
+    const MIN_MAX = 0.6; // at least one strong match
+    const MIN_TOTAL = 1.0; // or combined reasonable evidence
+    if ((best.max || 0) < MIN_MAX && (best.total || 0) < MIN_TOTAL) {
+      return { found: false };
+    }
+
+    return { found: true, sessionId: best.id, sessionName: best.name, count: best.count };
+  } catch (e) {
+    console.warn('handleGoogleSearchQuery error:', e);
+    return { found: false };
+  }
+}
+
+async function openSessionInNewWindow(sessionId) {
+  const DB_NAME = "NeuMemoDB";
+  const DB_VERSION = 6;
+  const TABS_STORE = "tabs";
+
+  const db = await new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onerror = (e) => reject(e.target?.error || e);
+    req.onsuccess = (e) => resolve(e.target.result);
+  });
+
+  try {
+    const urls = await new Promise((resolve, reject) => {
+      const tx = db.transaction(TABS_STORE, 'readonly');
+      const store = tx.objectStore(TABS_STORE);
+      const idx = store.index('sessionId');
+      const req = idx.getAll(sessionId);
+      req.onerror = (e) => reject(e.target?.error || e);
+      req.onsuccess = (e) => {
+        const rows = e.target.result || [];
+        resolve(rows.map(r => r.url).filter(Boolean));
+      };
+    });
+    if (urls.length > 0) {
+      await chrome.windows.create({ url: urls });
+    }
+  } finally {
+    try { db.close(); } catch {}
   }
 }
