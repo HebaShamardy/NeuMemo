@@ -1,7 +1,8 @@
 const DB_NAME = "NeuMemoDB";
-const DB_VERSION = 5; // Incremented version to trigger onupgradeneeded
+const DB_VERSION = 6; // Incremented version to trigger onupgradeneeded
 const SESSIONS_STORE = "sessions";
 const TABS_STORE = "tabs";
+const EXCLUDED_URLS_STORE = "excluded_urls";
 
 let db;
 
@@ -44,6 +45,9 @@ function initDatabase() {
             if (!db.objectStoreNames.contains(TABS_STORE)) {
                 const tabStore = db.createObjectStore(TABS_STORE, { keyPath: "url" });
                 tabStore.createIndex("sessionId", "sessionId", { unique: false });
+            }
+            if (!db.objectStoreNames.contains(EXCLUDED_URLS_STORE)) {
+                db.createObjectStore(EXCLUDED_URLS_STORE, { keyPath: "domain" });
             }
             
             // Data migration from old structure if necessary

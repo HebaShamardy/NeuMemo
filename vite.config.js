@@ -31,6 +31,8 @@ export default defineConfig({
         firebase_ai: resolve(__dirname, 'src/firebase_ai.js'),
         content: resolve(__dirname, 'src/content.js'),
         viewer: resolve(__dirname, 'src/viewer.html'),
+        options: resolve(__dirname, 'src/options.js'),
+        options_page: resolve(__dirname, 'src/options.html'),
       },
       output: {
         // preserve entry names (background.js, content.js, etc.)
@@ -64,6 +66,14 @@ export default defineConfig({
                 fs.copyFileSync(builtViewer, destViewer);
                 // eslint-disable-next-line no-console
                 console.log('Moved built viewer.html to dist/');
+              }
+              // Ensure options.html is also at the dist root when built under dist/src
+              const builtOptions = resolve(__dirname, 'dist', 'src', 'options.html');
+              const destOptions = resolve(__dirname, 'dist', 'options.html');
+              if (fs.existsSync(builtOptions)) {
+                fs.copyFileSync(builtOptions, destOptions);
+                // eslint-disable-next-line no-console
+                console.log('Moved built options.html to dist/');
               }
             } catch (err) {
               // eslint-disable-next-line no-console

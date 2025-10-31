@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NeuMemo Settings</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    :root {
+      --primary-color: #FF7B00;
+      --secondary-color: #005C97;
+      --background-color: #fdfcfa; /* Lighter than #FFF5E9 for pop-up */
+      --text-color: #333333;
+      --border-color: #e0e0e0;
+      --danger-color: #d32f2f;
+      --danger-hover-bg: #c62828;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background-color: var(--background-color);
+      color: var(--text-color);
+      margin: 0;
+      padding: 20px;
+      width: 580px; /* Fixed width for popup */
+      box-sizing: border-box;
+    }
+    .container {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .logo {
+      width: 48px;
+      height: 48px;
+    }
+    .header h1 {
+      font-size: 20px;
+      color: var(--secondary-color);
+      margin: 0 0 4px 0;
+      font-weight: 600;
+    }
+    .header p.desc {
+      font-size: 14px;
+      color: #555;
+      margin: 0;
+    }
+    .content {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+    h3 {
+      font-size: 16px;
+      color: var(--secondary-color);
+      margin: 0 0 12px 0;
+      padding-bottom: 8px;
+      border-bottom: 2px solid var(--border-color);
+    }
+    .input-row {
+      display: flex;
+      gap: 10px;
+    }
+    #domain-input {
+      flex: 1;
+      padding: 10px 12px;
+      font-size: 14px;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    #domain-input:focus {
+      outline: none;
+      border-color: var(--primary-color);
+      box-shadow: 0 0 0 3px rgba(255, 123, 0, 0.2);
+    }
+    #add-btn {
+      padding: 10px 20px;
+      font-size: 14px;
+      font-weight: 600;
+      color: white;
+      background-color: var(--primary-color);
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    #add-btn:hover {
+      background-color: #e66a00;
+    }
+    .hint {
+      color: #666;
+      font-size: 12px;
+      margin-top: 8px;
+    }
+    .rule {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      background-color: #eef;
+      padding: 2px 4px;
+      border-radius: 4px;
+    }
+    ul#exclude-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    ul#exclude-list li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background-color: white;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 10px 16px;
+      margin-bottom: 8px;
+    }
+    ul#exclude-list .rule {
+      font-size: 14px;
+      color: var(--secondary-color);
+      background-color: transparent;
+      padding: 0;
+    }
+    ul#exclude-list button {
+      background: none;
+      border: 1px solid var(--danger-color);
+      color: var(--danger-color);
+      padding: 4px 8px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      transition: background-color 0.2s, color 0.2s;
+    }
+    ul#exclude-list button:hover {
+      background-color: var(--danger-hover-bg);
+      border-color: var(--danger-hover-bg);
+      color: white;
+    }
+    .empty {
+      color: #777;
+      font-style: italic;
+      text-align: center;
+      padding: 20px;
+      background-color: #f9f9f9;
+      border: 1px dashed var(--border-color);
+      border-radius: 8px;
+    }
+    .disclaimer {
+      font-size: 12px;
+      color: #666;
+      background-color: #f9f9f9;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 12px;
+      margin-top: 8px;
+    }
+    .disclaimer strong {
+      color: var(--secondary-color);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <img src="imgs/logo.png" alt="NeuMemo Logo" class="logo">
+      <div>
+        <h1>NeuMemo Settings</h1>
+        <p class="desc">Exclude sites you don't want NeuMemo to process or store.</p>
+      </div>
+    </div>
+
+    <div class="content">
+      <div class="add-section">
+        <h3>Add a domain to exclude</h3>
+        <div class="input-row">
+          <input id="domain-input" type="text" placeholder="e.g. youtube.com" />
+          <button id="add-btn">Add</button>
+        </div>
+        <div class="hint">Tip: Adding <span class="rule">example.com</span> excludes all its subdomains.</div>
+      </div>
+
+      <div class="list-section">
+        <h3>Excluded Domains</h3>
+        <ul id="exclude-list"></ul>
+        <div id="empty-state" class="empty">No domains excluded yet.</div>
+      </div>
+
+      <div class="disclaimer">
+        <strong>Note:</strong> Excluding a domain will prevent it from being processed in the future. However, it will not be deleted from previous sessions. You can manually delete them from the main viewer.
+      </div>
+    </div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>
