@@ -143,10 +143,12 @@ async function collectAndSummarizeAllTabs() {
     }
 
     // 3. Fetch historical tabs from IndexedDB and combine with current tabs
-  let historicalTabs = await fetchHistoricalTabsFromDB();
-  // Filter out excluded domains from historical as well (won't be sent to AI)
-  historicalTabs = historicalTabs.filter(t => !isUrlExcluded(t.url));
-    console.log(`📚 Loaded ${historicalTabs.length} historical tabs from DB.`);
+    const historicalTabsRaw = await fetchHistoricalTabsFromDB();
+    const loadedHistoricalCountRaw = historicalTabsRaw.length;
+    // Filter out excluded domains from historical as well (won't be sent to AI)
+    let historicalTabs = historicalTabsRaw.filter(t => !isUrlExcluded(t.url));
+    const excludedHistoryCount = loadedHistoricalCountRaw - historicalTabs.length;
+    console.log(`📚 Loaded ${loadedHistoricalCountRaw} historical tabs from DB (excluded by rules: ${excludedHistoryCount}). Using ${historicalTabs.length}.`);
 
     // 3.5 Pre-summarize current tabs that are NOT in history using lite model (batched)
     const historyUrlSet = new Set(historicalTabs.map(t => t.url).filter(Boolean));
@@ -194,10 +196,14 @@ async function collectAndSummarizeAllTabs() {
     }
 
     const combinedTabs = Array.from(byUrl.values());
-    console.log(`🔗 Combined set for AI: ${combinedTabs.length} unique tabs (current provided: ${validTabs.length}, historical provided: ${historicalTabs.length}, skipped current due to history: ${skippedCurrentBecauseHistory}).`);
+    const newTabsCount = combinedTabs.filter(t => t && t.url && !historyUrlSet.has(t.url)).length;
+    const historyUsedCount = combinedTabs.filter(t => t && t.source === 'history').length;
+    console.log(
+      `🔗 Dataset prepared: ${combinedTabs.length} unique URLs (history used: ${historyUsedCount}, new: ${newTabsCount}, skipped current duplicates: ${skippedCurrentBecauseHistory}; loaded history: ${loadedHistoricalCountRaw}, excluded history: ${excludedHistoryCount}). AI will classify only new tabs; history is preserved.`
+    );
 
-    // 5. Summarize all combined tabs in a single request
-    console.log(`🧠 Running summarizeTabs for ${combinedTabs.length} tabs (current + history)...`);
+    // 5. Classify/summarize only NEW tabs; pass-through history in final results
+    console.log(`🧠 Running summarizeTabs with ${combinedTabs.length} total (AI will classify ${newTabsCount} new tabs; history preserved).`);
   const aiResults = await summarizeTabs(combinedTabs);
     console.log('🤖 Full AI Response:', JSON.stringify(aiResults));
     // 6. Save the results to IndexedDB
@@ -355,6 +361,7 @@ async function fetchHistoricalTabsFromDB() {
   const DB_NAME = "NeuMemoDB";
   const DB_VERSION = 6;
   const TABS_STORE = "tabs";
+  const SESSIONS_STORE = "sessions";
 
   try {
     const db = await new Promise((resolve, reject) => {

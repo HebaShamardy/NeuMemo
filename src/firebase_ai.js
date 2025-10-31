@@ -81,7 +81,7 @@ Rules:
 - Set tab_id EXACTLY to the tab's URL from the input.
 - For assignment to existing sessions, copy session_name exactly as shown and set session_id to that numeric id.
 - For a new session, choose a new session_name (not generic), and omit session_id entirely (do not include null or 0).
-- summarized_content: a factual 8–15 sentence summary of the tab content (plain text, no markdown).
+- summarized_content: a factual summary that captures the main ideas and sections/topics covered, key entities/terms, and important facts. Make it searchable later by including concrete terms and section-level themes. Limit to a maximum of 500 words. Plain text only; no markdown.
 `;
 
 /**
@@ -435,8 +435,9 @@ export async function summarizeTabsLiteBatch(tabs, customInstruction = "", perTa
             let promptParts = [
                 "You are a helpful assistant that summarizes multiple web pages.",
                 "For each input tab, return JSON ONLY as an array of objects: { url: string, title: string, summary: string }.",
-                "Each summary should be substantive and information-dense: 8-15 sentences (~150-300 words). Capture main ideas, sections/topics covered, key insights, important entities/terms, and any conclusions. Keep it factual, neutral, and self-contained. No markdown; plain prose only.",
+                    "Each summary must be factual and information-dense, capturing the main ideas and section-level topics, key entities/terms, and important facts so it can be searched later. Limit each summary to a maximum of 500 words. Keep it neutral and self-contained. Plain text only; no markdown.",
                 "Match each output object's url and title exactly to the input URL and title.",
+                "Strict formatting: Output must be valid RFC 8259 JSON.",
             ];
 
             if (customInstruction) {
