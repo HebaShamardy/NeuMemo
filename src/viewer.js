@@ -10,8 +10,20 @@ document.addEventListener("DOMContentLoaded", () => {
         loadSessions();
         document.getElementById("save-session").addEventListener("click", saveCurrentSession);
         document.getElementById("new-session").addEventListener("click", createNewSession);
+        document.getElementById("search-input").addEventListener("keydown", handleSearch);
     });
     initResizeableSidebar();
+    // Listen for background completion/failure notifications
+    chrome.runtime.onMessage.addListener((message) => {
+        if (message?.type === "COLLECT_TABS_DONE") {
+            showLoading(false);
+            loadSessions();
+        } else if (message?.type === "COLLECT_TABS_FAILED") {
+            showLoading(false);
+            console.warn("Tab collection/summarization failed:", message?.error || "Unknown error");
+            alert("Failed to organize tabs. Please try again.");
+        }
+    });
 });
 
 function initDatabase() {
@@ -119,6 +131,7 @@ function loadSessions() {
             li.appendChild(sessionNameSpan);
 
             li.addEventListener("click", () => {
+                document.getElementById("search-input").value = ""; // Clear search
                 loadTabsForSession(session.id);
                 document.querySelectorAll("#sessions-list li").forEach(item => item.classList.remove("active"));
                 li.classList.add("active");
@@ -167,6 +180,11 @@ function loadSessions() {
 }
 
 function loadTabsForSession(sessionId) {
+    const searchInput = document.getElementById("search-input");
+    if (searchInput.value.trim().length > 0) {
+        // If there is a search query, don't load session tabs
+        return;
+    }
     const transaction = db.transaction(TABS_STORE, "readonly");
     const store = transaction.objectStore(TABS_STORE);
     const index = store.index("sessionId");
@@ -212,15 +230,101 @@ function loadTabsForSession(sessionId) {
     };
 }
 
+async function handleSearch(event) {
+    if (event.key !== 'Enter') {
+        return;
+    }
+    const query = event.target.value.trim();
+    if (query.length === 0) {
+        // If query is empty, load tabs for the selected session
+        const activeSession = document.querySelector("#sessions-list li.active");
+        if (activeSession) {
+            loadTabsForSession(parseInt(activeSession.dataset.sessionId));
+        }
+        return;
+    }
+
+    const allTabs = await getAllTabs();
+    
+    // Unselect any active session
+    document.querySelectorAll("#sessions-list li.active").forEach(item => item.classList.remove("active"));
+
+    chrome.runtime.sendMessage({ type: "SEARCH_TABS", query: query, tabs: allTabs }, (response) => {
+        if (chrome.runtime.lastError) {
+            console.error("Error sending search message:", chrome.runtime.lastError);
+            return;
+        }
+        displaySearchedTabs(response.tabs);
+    });
+}
+
+function displaySearchedTabs(tabs) {
+    const tabsList = document.getElementById("tabs-list");
+    tabsList.innerHTML = "";
+
+    if (!tabs) {
+        return;
+    }
+
+    tabs.forEach(tab => {
+        const li = document.createElement("li");
+        const tabLink = document.createElement("a");
+        tabLink.href = tab.url;
+        tabLink.textContent = tab.title || tab.url;
+        tabLink.target = "_blank";
+        
+        const tabSummary = document.createElement("p");
+        tabSummary.textContent = tab.summary || '';
+        
+        const tabContent = document.createElement('div');
+        tabContent.appendChild(tabLink);
+        tabContent.appendChild(tabSummary);
+        
+        li.appendChild(tabContent);
+        tabsList.appendChild(li);
+    });
+}
+
+function getAllTabs() {
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(TABS_STORE, "readonly");
+        const store = transaction.objectStore(TABS_STORE);
+        const request = store.getAll();
+
+        request.onsuccess = (event) => {
+            resolve(event.target.result);
+        };
+
+        request.onerror = (event) => {
+            reject(event.target.error);
+        };
+    });
+}
+
 function saveCurrentSession() {
+    showLoading(true);
     chrome.runtime.sendMessage({ type: "COLLECT_TABS" }, (response) => {
         if (chrome.runtime.lastError) {
             console.error("Error sending collect message:", chrome.runtime.lastError);
+            showLoading(false);
             return;
         }
-        console.log(response.status);
-        setTimeout(loadSessions, 2000); // Refresh view
+    console.log(response.status);
+        // We'll refresh when background notifies COLLECT_TABS_DONE
     });
+}
+
+function showLoading(isLoading) {
+    const overlay = document.getElementById("loading-overlay");
+    const saveBtn = document.getElementById("save-session");
+    if (!overlay) return;
+    if (isLoading) {
+        overlay.classList.remove("hidden");
+        if (saveBtn) saveBtn.disabled = true;
+    } else {
+        overlay.classList.add("hidden");
+        if (saveBtn) saveBtn.disabled = false;
+    }
 }
 
 function createNewSession() {

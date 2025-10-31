@@ -19,6 +19,7 @@
             <div id="header">
                 <img src="imgs/logo.png" alt="Nemo Logo" id="main-logo">
                 <p class="tagline">A memory fish for your digital ocean.</p>
+                <input type="text" id="search-input" placeholder="Search tabs and press Enter...">
             </div>
             <div class="button-container">
                 <button id="save-session" class="action-button" title="Collects current tabs to organize into sessions">
@@ -28,6 +29,11 @@
             <ul id="tabs-list">
                 <!-- Tab items for the selected session will be populated here -->
             </ul>
+        </div>
+        <!-- Loading overlay shown during summarization -->
+        <div id="loading-overlay" class="hidden">
+            <div class="spinner"></div>
+            <div class="loading-text">Organizing your tabs into sessions…</div>
         </div>
     </div>
     <script type="module" src="viewer.js"></script>
