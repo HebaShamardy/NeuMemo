@@ -1,4 +1,5 @@
 import { summarizeTabs, summarizeTabsLiteBatch, searchRelevantTabs } from './firebase_ai.js';
+import { config } from './config.js';
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "COLLECT_TABS") {
     console.log("🧠 Received collect tabs request. Starting the process...");
@@ -45,9 +46,23 @@ async function collectAndSummarizeAllTabs() {
     }
     console.log(`✅ Found ${injectableTabs.length} injectable tabs.`);
 
-    // 2. Inject scripts and collect content from all tabs in parallel
-    const contentPromises = injectableTabs.map(tab => injectAndGetContent(tab));
-    const tabContents = await Promise.all(contentPromises);
+  // 2. Inject scripts and collect content with limited concurrency to avoid mass reload pressure
+  const CONCURRENCY = config.injection.concurrency; // configurable
+    const processWithConcurrency = async (items, concurrency, mapper) => {
+      const results = new Array(items.length);
+      let index = 0;
+      const workers = Array(Math.min(concurrency, items.length)).fill(0).map(async () => {
+        while (true) {
+          const current = index++;
+          if (current >= items.length) break;
+          results[current] = await mapper(items[current], current);
+        }
+      });
+      await Promise.all(workers);
+      return results;
+    };
+
+    const tabContents = await processWithConcurrency(injectableTabs, CONCURRENCY, injectAndGetContent);
 
     // Filter out any tabs that failed to return content
     const validTabs = tabContents.filter(t => t !== null).map(t => ({ ...t, source: 'current' }));
@@ -65,7 +80,7 @@ async function collectAndSummarizeAllTabs() {
     // 3.5 Pre-summarize current tabs that are NOT in history using lite model (batched)
     const historyUrlSet = new Set(historicalTabs.map(t => t.url).filter(Boolean));
     const toSummarize = validTabs.filter(t => t && t.url && !historyUrlSet.has(t.url));
-    console.log(`🪄 Pre-summarizing ${toSummarize.length} current tab(s) with lite model — auto-batched (5 tabs/request, up to 20 requests concurrently).`);
+  console.log(`🪄 Pre-summarizing ${toSummarize.length} current tab(s) with lite model — auto-batched (${config.liteSummary.batchSize} tabs/request, up to ${config.liteSummary.concurrency} requests concurrently).`);
 
     const summaryByUrl = {};
     try {
@@ -168,24 +183,79 @@ async function collectAndSummarizeAllTabs() {
 
 async function injectAndGetContent(tab) {
   const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+  const withTimeout = (promise, ms, label = "operation") => {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(label + " timed out")), ms))
+    ]);
+  };
+
+  const waitForTabReady = async (tabId, expectedUrl, timeoutMs = config.injection.reloadWaitTimeoutMs) => {
+    // Resolve when tab is fully loaded (status 'complete') and not discarded/frozen
+    return withTimeout(new Promise((resolve, reject) => {
+      let done = false;
+      const cleanup = () => {
+        if (done) return;
+        done = true;
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+      };
+      const check = async () => {
+        try {
+          const t = await chrome.tabs.get(tabId);
+          const url = t.url || t.pendingUrl || '';
+          const httpOk = /^https?:\/\//.test(url);
+          if (t.status === 'complete' && !t.discarded && !t.frozen && httpOk) {
+            cleanup();
+            resolve(true);
+          }
+        } catch (e) {
+          cleanup();
+          reject(e);
+        }
+      };
+      const onUpdated = (updatedTabId, info, updatedTab) => {
+        if (updatedTabId !== tabId) return;
+        if (info.status === 'complete') {
+          // status complete fired; double-check flags
+          check();
+        }
+      };
+      chrome.tabs.onUpdated.addListener(onUpdated);
+      // Initial small poll in case it's already ready
+      check();
+    }), timeoutMs, 'waitForTabReady');
+  };
   try {
     // Reload frozen/discarded tabs before injection
     if (tab.frozen || tab.discarded) {
+      try {
+        // Temporarily prevent auto-discarding during capture
+        await chrome.tabs.update(tab.id, { autoDiscardable: false });
+      } catch {}
       await chrome.tabs.reload(tab.id);
-      await sleep(500); // Give tab a moment to start reloading
       console.log('→ Reloaded frozen/discarded tab:', tab.url);
+      // Wait for the tab to be fully loaded and active in memory
+      await waitForTabReady(tab.id, tab.url).catch(() => {});
     }
 
     // Inject the content script. It will automatically run.
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      files: ['content.js'],
-    });
+    await withTimeout(
+      chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ['content.js'],
+      }),
+      config.injection.injectTimeoutMs,
+      'script injection'
+    );
 
     // After injection, send a message to the content script telling it to get the content
     // and send it back. This is more reliable than having the content script send a message
     // on its own.
-    const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_CONTENT' });
+    const response = await withTimeout(
+      chrome.tabs.sendMessage(tab.id, { type: 'GET_CONTENT' }),
+      config.injection.contentFetchTimeoutMs,
+      'content fetch'
+    );
 
     if (response && response.url) {
       return {
