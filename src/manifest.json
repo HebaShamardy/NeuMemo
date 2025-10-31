@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "NeuMemo (Nemo)",
   "version": "1.0.0",
-  "description": "Your smart session manager.",
+  "description": "Organize tabs into smart sessions with AI, get summaries, Google Search alerts, and exclude domains.",
   "permissions": [
     "tabs",
     "scripting",

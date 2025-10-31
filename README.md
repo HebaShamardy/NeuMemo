@@ -124,6 +124,8 @@ Tune these if you hit rate limits or want faster/slower processing.
 - When you press “Save Session,” Nemo sends content to the AI model (Gemini) through the Firebase AI SDK to generate summaries and groupings.
 - Excluded domains are never processed or sent.
 
+Read the full privacy policy: https://github.com/HebaShamardy/NeuMemo/blob/master/PRIVACY.md
+
 ## Troubleshooting
 
 - Nothing shows in the viewer
