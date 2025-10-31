@@ -65,7 +65,7 @@ async function collectAndSummarizeAllTabs() {
     // 3.5 Pre-summarize current tabs that are NOT in history using lite model (batched)
     const historyUrlSet = new Set(historicalTabs.map(t => t.url).filter(Boolean));
     const toSummarize = validTabs.filter(t => t && t.url && !historyUrlSet.has(t.url));
-    console.log(`🪄 Pre-summarizing ${toSummarize.length} current tab(s) with lite model — auto-batched (5 tabs/request, up to 5 requests concurrently).`);
+    console.log(`🪄 Pre-summarizing ${toSummarize.length} current tab(s) with lite model — auto-batched (5 tabs/request, up to 20 requests concurrently).`);
 
     const summaryByUrl = {};
     try {
@@ -115,8 +115,40 @@ async function collectAndSummarizeAllTabs() {
     const aiResults = await summarizeTabs(combinedTabs);
     console.log('🤖 Full AI Response:', JSON.stringify(aiResults));
     // 6. Save the results to IndexedDB
-    // Build a title lookup from the combined set so historical-only URLs keep their known titles
-    const titles = Object.fromEntries(combinedTabs.map(t => [t.url, t.title]));
+    // Build a BEST-EFFORT title lookup using both current and history, preferring non-empty, non-"Untitled" titles
+    const isGoodTitle = (s) => {
+      const val = (s || "").trim();
+      return val.length > 0 && val.toLowerCase() !== 'untitled';
+    };
+
+    const bestTitleByUrl = new Map();
+    // Seed from history first
+    for (const t of historicalTabs) {
+      if (!t?.url) continue;
+      if (isGoodTitle(t.title)) bestTitleByUrl.set(t.url, t.title.trim());
+      else if (!bestTitleByUrl.has(t.url)) bestTitleByUrl.set(t.url, (t.title || 'Untitled').trim());
+    }
+    // Overlay current titles, preferring a good title
+    for (const t of validTabs) {
+      if (!t?.url) continue;
+      const curr = (t.title || '').trim();
+      const have = bestTitleByUrl.get(t.url);
+      if (isGoodTitle(curr)) {
+        // Prefer current good title over any existing
+        bestTitleByUrl.set(t.url, curr);
+      } else if (!have) {
+        bestTitleByUrl.set(t.url, curr || 'Untitled');
+      }
+    }
+    // Ensure every combined URL has some title value
+    for (const t of combinedTabs) {
+      if (!t?.url) continue;
+      if (!bestTitleByUrl.has(t.url)) {
+        bestTitleByUrl.set(t.url, (t.title || 'Untitled').trim() || 'Untitled');
+      }
+    }
+
+    const titles = Object.fromEntries(bestTitleByUrl.entries());
     await saveAISummaries(aiResults, titles);
     console.log(`✅ Successfully saved AI summaries for ${aiResults.length} tabs.`);
     // Notify UI pages (e.g., viewer.html) that collection and summarization are complete
@@ -306,8 +338,12 @@ async function saveAISummaries(aiResults, tabTitles) {
   });
 
   try {
-    // 1) Build a set of URLs from AI results for reconciliation
-    const urlsFromAI = new Set(aiResults.map(r => r.tab_id).filter(Boolean));
+    // 1) Build a set of VALID URLs from AI results for reconciliation (only those we have titles for)
+    const urlsFromAI = new Set(
+      aiResults
+        .map(r => r.tab_id)
+        .filter(u => typeof u === 'string' && !!u && tabTitles && Object.prototype.hasOwnProperty.call(tabTitles, u))
+    );
 
     // 2) Remove tabs not present in the AI output (full reconcile)
     await new Promise((resolve, reject) => {
@@ -402,13 +438,19 @@ async function saveAISummaries(aiResults, tabTitles) {
       const sessionName = result.session_name || "Uncategorized";
       const sessionId = await getOrCreateSessionId(sessionName);
 
+      // Skip any AI rows that don't map to a known URL we provided
+      const url = (result && typeof result.tab_id === 'string') ? result.tab_id : '';
+      if (!url || !Object.prototype.hasOwnProperty.call(tabTitles, url)) {
+        continue;
+      }
+
       await new Promise((resolve, reject) => {
         const tabTx = db.transaction(TABS_STORE, "readwrite");
         const tabStore = tabTx.objectStore(TABS_STORE);
         const putReq = tabStore.put({
           sessionId,
-          url: result.tab_id,
-          title: tabTitles[result.tab_id] || "Untitled",
+          url,
+          title: tabTitles[url] || "Untitled",
           summary: result.summarized_content,
           timestamp: new Date().toISOString(),
         });

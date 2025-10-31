@@ -309,7 +309,7 @@ function saveCurrentSession() {
             showLoading(false);
             return;
         }
-        console.log(response.status);
+    console.log(response.status);
         // We'll refresh when background notifies COLLECT_TABS_DONE
     });
 }

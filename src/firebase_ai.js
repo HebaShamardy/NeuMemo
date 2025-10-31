@@ -37,7 +37,12 @@ Analyze the following tabs and group them into logical sessions.
 The session names should be descriptive and specific, but not so granular that every tab gets its own session. For example, group tabs about 'React Hooks' and 'State Management' into a session called 'React Development', not just 'Development'.
 Assign each tab a \`session_name\` and a factual \`summarized_content\`.
 Tabs with the same topic MUST share the same \`session_name\`.
-The final output must be only a valid JSON array of objects.
+
+Output JSON ONLY as an array of objects with this exact shape: { tab_id: string, session_name: string, summarized_content: string }.
+IMPORTANT MAPPING RULES:
+- Set tab_id EXACTLY to the tab's URL from the input. Do NOT invent IDs like "tab_1" or "url_3".
+- Copy the URL literally; do not alter, shorten, or paraphrase it.
+- Return one object per input tab (do not drop tabs).
 
 Input tabs:
 `;
@@ -89,7 +94,7 @@ const liteResponseSchema = Schema.array({
 const getLiteModelConfig = () => ({
     mode: InferenceMode.PREFER_ON_DEVICE,
     inCloudParams: {
-        model: "gemini-2.0-flash-lite",
+        model: "gemini-2.5-flash-lite",
         generationConfig: {
             responseMimeType: "application/json",
             responseSchema: liteResponseSchema,
@@ -125,7 +130,7 @@ const searchResponseSchema = Schema.array({
 const getSearchModelConfig = () => ({
     mode: InferenceMode.PREFER_ON_DEVICE,
     inCloudParams: {
-        model: "gemini-2.0-flash-lite",
+        model: "gemini-2.5-flash-lite",
         generationConfig: {
             responseMimeType: "application/json",
             responseSchema: searchResponseSchema,
@@ -210,7 +215,7 @@ async function summarizeTabs(tabs, maxTokens = 200000) {
     };
 
     const appendTab = (t) => {
-        const tabHeader = `\n<NEMO_tab>\nTitle: ${t.title}\nURL: ${t.url}\nContent:\n<CONTENT_START>\n`;
+        const tabHeader = `\n<NEMO_tab>\nID: ${t.url}\nTitle: ${t.title}\nURL: ${t.url}\nContent:\n<CONTENT_START>\n`;
         const tabFooter = `\n<CONTENT_END>`;
         
         // Calculate tokens for header and footer
@@ -326,9 +331,9 @@ export { recreateModel };
 export async function summarizeTabsLiteBatch(tabs, customInstruction = "", perTabMaxTokens = 1000) {
     if (!Array.isArray(tabs) || tabs.length === 0) return [];
     try {
-        // Settings: 5 tabs per request, run up to 5 requests concurrently
-        const BATCH_SIZE = 5;
-        const CONCURRENCY = 5;
+    // Settings: 5 tabs per request, run up to 20 requests concurrently
+    const BATCH_SIZE = 5;
+    const CONCURRENCY = 10;
 
         const encoding = get_encoding("cl100k_base");
 
