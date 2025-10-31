@@ -5,6 +5,8 @@ const TABS_STORE = "tabs";
 const EXCLUDED_URLS_STORE = "excluded_urls";
 
 let db;
+// Keep a long-lived port open during collection to keep the background SW alive
+let collectKeepAlivePort = null;
 
 document.addEventListener("DOMContentLoaded", () => {
     initDatabase().then(() => {
@@ -18,11 +20,16 @@ document.addEventListener("DOMContentLoaded", () => {
     chrome.runtime.onMessage.addListener((message) => {
         if (message?.type === "COLLECT_TABS_DONE") {
             showLoading(false);
+            // Close keepalive port now that we're done
+            try { collectKeepAlivePort?.disconnect(); } catch {}
+            collectKeepAlivePort = null;
             loadSessions();
         } else if (message?.type === "COLLECT_TABS_FAILED") {
             showLoading(false);
             console.warn("Tab collection/summarization failed:", message?.error || "Unknown error");
             alert("Failed to organize tabs. Please try again.");
+            try { collectKeepAlivePort?.disconnect(); } catch {}
+            collectKeepAlivePort = null;
         }
     });
 });
@@ -310,10 +317,18 @@ function getAllTabs() {
 
 function saveCurrentSession() {
     showLoading(true, 'collect');
+    // Open a keepalive port so the background service worker doesn't go idle
+    try {
+        if (!collectKeepAlivePort) {
+            collectKeepAlivePort = chrome.runtime.connect({ name: 'nemo-collect-keepalive' });
+        }
+    } catch {}
     chrome.runtime.sendMessage({ type: "COLLECT_TABS" }, (response) => {
         if (chrome.runtime.lastError) {
             console.error("Error sending collect message:", chrome.runtime.lastError);
             showLoading(false);
+            try { collectKeepAlivePort?.disconnect(); } catch {}
+            collectKeepAlivePort = null;
             return;
         }
     console.log(response.status);
@@ -334,7 +349,7 @@ function showLoading(isLoading, mode = 'collect') {
                 subtextEl.textContent = 'Hang tight—finding the most relevant results.';
             } else {
                 titleEl.textContent = 'Organizing your tabs into sessions…';
-                subtextEl.textContent = 'This may take about 2–3 minutes due to free-tier rate limits. Perfect time to grab a coffee—when you come back, it should be all set ☕';
+                subtextEl.textContent = 'This may take about 2-3 minutes if you have lots of tabs. Perfect time to grab a coffee—when you come back, it should be all set ☕';
             }
         }
         overlay.classList.remove("hidden");

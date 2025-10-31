@@ -93,7 +93,7 @@ const getModelConfig = () => ({
 
     // --- 1. Cloud Model Configuration (Primary) ---
     inCloudParams: {
-        model: "gemini-2.5-flash",
+        model: "gemini-2.5-pro",
         generationConfig: {
             responseMimeType: "application/json",
             responseSchema: responseSchema,
@@ -357,7 +357,10 @@ async function summarizeTabs(tabs, maxTokens = config.summarize.maxTokens) {
     }
 
     const finalPrompt = `${promptTemplate}\n${tabsInput}`;
-    
+    // Log the full final prompt for debugging/inspection
+    try {
+        console.log("📝 finalPrompt:\n" + finalPrompt);
+    } catch {}
     console.log(`📝 Sending final prompt to AI (${totalTokens} tokens).`);
 
     const request = {
@@ -366,8 +369,30 @@ async function summarizeTabs(tabs, maxTokens = config.summarize.maxTokens) {
         ]
     };
 
+    // Helper: retry cloud call when aborted/timeouts occur
+    const callWithRetry = async (req, attempts = 2) => {
+        let lastErr;
+        for (let i = 0; i <= attempts; i++) {
+            try {
+                return await model.generateContent(req);
+            } catch (error) {
+                const msg = String(error?.message || error || '');
+                const isAbort = /aborted|AbortError|The user aborted a request/i.test(msg);
+                if (isAbort && i < attempts) {
+                    const backoffMs = 1200 * (i + 1);
+                    console.warn(`AI call aborted; retrying in ${backoffMs}ms (attempt ${i + 2}/${attempts + 1})`);
+                    await sleep(backoffMs);
+                    continue;
+                }
+                lastErr = error;
+                break;
+            }
+        }
+        throw lastErr;
+    };
+
     try {
-        const result = await model.generateContent(request);
+        const result = await callWithRetry(request, 2);
         // Log which inference source was used by the model (cloud vs on-device)
         try {
             console.log('You used: ' + (result?.response?.inferenceSource || 'unknown'));

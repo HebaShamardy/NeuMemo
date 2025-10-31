@@ -94,6 +94,11 @@ npm run dev
 
 Then click “Reload” on the Chrome extensions page after builds complete.
 
+## Performance notes
+
+- If you have more than ~20 open tabs, organizing a session can take about 2–5 minutes due to model calls, batching, and free‑tier rate limits.
+- If some tabs are frozen or discarded by the browser, Nemo will first reload them before capture; this can add extra time while those tabs resume.
+
 ## Using Nemo
 
 1. Open the viewer (click the Nemo icon) and press “Organize Tabs”

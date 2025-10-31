@@ -4,6 +4,23 @@ import { config } from './config.js';
 // ========== Excluded domains settings (loaded from IndexedDB) ==========
 let excludedDomains = [];
 
+// ========== Keep-alive management for long-running tasks ==========
+// Keep a reference to connected ports so the MV3 service worker doesn't go idle
+// during long AI summarize operations.
+const keepAlivePorts = new Set();
+chrome.runtime.onConnect.addListener((port) => {
+  try {
+    if (port && port.name === 'nemo-collect-keepalive') {
+      keepAlivePorts.add(port);
+      port.onDisconnect.addListener(() => {
+        keepAlivePorts.delete(port);
+      });
+    }
+  } catch (e) {
+    console.warn('Keep-alive port handling failed:', e);
+  }
+});
+
 const DB_NAME = "NeuMemoDB";
 const DB_VERSION = 6;
 const EXCLUDED_URLS_STORE = "excluded_urls";
