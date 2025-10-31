@@ -4,7 +4,7 @@ NeuMemo saves your browsing sessions by collecting your open tabs, generating co
 
 ## Highlights
 
-- One-click “Save Session” to capture all open tabs (title, URL, and text content)
+- One-click “Organize Tabs” to capture all open tabs (title, URL, and text content)
 - AI summaries and smart grouping into sessions using Google Gemini through Firebase AI
 - Fast on-device “lite” summaries to save cost/tokens; batched and rate-limited
 - Semantic search over your saved tabs with relevance scoring
@@ -33,7 +33,7 @@ NeuMemo saves your browsing sessions by collecting your open tabs, generating co
 	- On Google results pages, Nemo inspects your query and, if a strong match exists in your history, shows a small suggestion card to reopen that session.
 
 - Exclude domains (Settings)
-	- From the extension options page, add domains (e.g., `example.com`) you don’t want Nemo to process or store. Rules are domain-based and include subdomains.
+	- From the extension options page, add domains (e.g., `example.com`) you don’t want Nemo to process or store.
 	- Exclusions apply to future captures and prevent content from being sent to the AI model.
 
 - Performance and cost controls
@@ -48,7 +48,7 @@ NeuMemo saves your browsing sessions by collecting your open tabs, generating co
 - `tabs`, `activeTab`, `scripting`, `storage`: capture content from tabs and persist locally
 - `host_permissions: *://*/*`: allow reading page content on user-initiated capture
 
-Content scripts run only on Google domains for the search hint feature. The actual capture step is performed by the background service worker on demand when you click “Save Session.”
+Content scripts run only on Google domains for the search hint feature. The actual capture step is performed by the background service worker on demand when you click “Organize Tabs”
 
 ## Project structure
 
