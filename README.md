@@ -9,7 +9,7 @@ NeuMemo saves your browsing sessions by collecting your open tabs, generating co
 - Fast on-device “lite” summaries to save cost/tokens; batched and rate-limited
 - Semantic search over your saved tabs with relevance scoring
 - Helpful Google Search hints: on google.com, Nemo suggests reopening the best-matching past session
-- Full viewer UI to browse sessions, move/delete tabs, rename/delete sessions, open an entire session in a new window
+- Full viewer UI to browse sessions, create new sessions, move/delete tabs, rename/delete sessions, open an entire session in a new window
 - Privacy-first: everything is stored locally; excluded domains are never processed or sent to AI
 
 ## How it works (at a glance)
@@ -24,7 +24,7 @@ NeuMemo saves your browsing sessions by collecting your open tabs, generating co
 
 - Session organizer
 	- Click the Nemo icon to open `viewer.html` and press the big button to organize your current tabs.
-	- Tabs are grouped into sessions with concise summaries. You can rename or delete sessions and open all tabs in a new window.
+	- Tabs are grouped into sessions with concise summaries. You can create new sessions, move tabs between sessions, rename or delete sessions, and open all tabs in a session in a new window.
 
 - Semantic search
 	- Type a query in the viewer’s search box and press Enter. Nemo uses a search-optimized prompt to find the most relevant tabs across all sessions.
@@ -96,11 +96,13 @@ Then click “Reload” on the Chrome extensions page after builds complete.
 
 ## Using Nemo
 
-1. Open the viewer (click the Nemo icon) and press “Save Session”
+1. Open the viewer (click the Nemo icon) and press “Organize Tabs”
 2. Wait for the overlay to finish (free-tier builds can take ~2–3 minutes)
 3. Browse sessions, open a session in a new window, move or delete tabs
-4. Search: type your query and press Enter to see the most relevant tabs
-5. Settings: on the extension’s Details page, click “Extension options” to add excluded domains
+4. Create a new session: click “New Session” in the sidebar and give it a name
+5. Move a tab to another session: click “Move” on the tab and choose the destination session
+6. Search: type your query and press Enter to see the most relevant tabs
+7. Settings: on the extension’s Details page, click “Extension options” to add excluded domains
 
 ## Configuration knobs (`src/config.js`)
 
