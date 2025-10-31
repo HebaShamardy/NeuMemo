@@ -1,5 +1,71 @@
 import { summarizeTabs, summarizeTabsLiteBatch, searchRelevantTabs } from './firebase_ai.js';
 import { config } from './config.js';
+
+// ========== Excluded domains settings (loaded from IndexedDB) ==========
+let excludedDomains = [];
+
+const DB_NAME = "NeuMemoDB";
+const DB_VERSION = 6;
+const EXCLUDED_URLS_STORE = "excluded_urls";
+
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onerror = (event) => reject("Database error: " + event.target.error);
+    request.onsuccess = (event) => resolve(event.target.result);
+    request.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      if (!db.objectStoreNames.contains(EXCLUDED_URLS_STORE)) {
+        db.createObjectStore(EXCLUDED_URLS_STORE, { keyPath: "domain" });
+      }
+    };
+  });
+}
+
+async function loadExcludedDomains() {
+  try {
+    const db = await openDB();
+    const domains = await new Promise((resolve, reject) => {
+      const transaction = db.transaction(EXCLUDED_URLS_STORE, "readonly");
+      const store = transaction.objectStore(EXCLUDED_URLS_STORE);
+      const request = store.getAll();
+      request.onerror = (event) => reject("Error loading rules: " + event.target.error);
+      request.onsuccess = (event) => {
+        const domainList = event.target.result.map(item => item.domain);
+        resolve(domainList);
+      };
+      db.close();
+    });
+    excludedDomains = domains;
+    console.log('🔧 Loaded excluded domains:', excludedDomains);
+  } catch (e) {
+    console.warn('Failed to load excluded domains:', e);
+    excludedDomains = [];
+  }
+}
+
+function hostnameFromUrl(url) {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function isUrlExcluded(url) {
+  const hostname = hostnameFromUrl(url);
+  if (!hostname) return false;
+  for (const rule of excludedDomains) {
+    if (hostname === rule || hostname.endsWith('.' + rule)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Initial load
+loadExcludedDomains();
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "COLLECT_TABS") {
     console.log("🧠 Received collect tabs request. Starting the process...");
@@ -32,12 +98,15 @@ async function searchTabsLite(query, tabs) {
 }
 
 async function collectAndSummarizeAllTabs() {
+  await loadExcludedDomains(); // Reload rules before processing
   try {
     // 1. Get all eligible tabs
     const allTabs = await chrome.tabs.query({});
     const injectableTabs = allTabs.filter(tab => {
       const url = tab.url || tab.pendingUrl || '';
-      return tab.id && url && /^https?:\/\//.test(url);
+      if (!(tab.id && url && /^https?:\/\//.test(url))) return false;
+      // Exclude tabs whose hostname is in user's exclusion list
+      return !isUrlExcluded(url);
     });
 
     if (injectableTabs.length === 0) {
@@ -74,7 +143,9 @@ async function collectAndSummarizeAllTabs() {
     }
 
     // 3. Fetch historical tabs from IndexedDB and combine with current tabs
-    const historicalTabs = await fetchHistoricalTabsFromDB();
+  let historicalTabs = await fetchHistoricalTabsFromDB();
+  // Filter out excluded domains from historical as well (won't be sent to AI)
+  historicalTabs = historicalTabs.filter(t => !isUrlExcluded(t.url));
     console.log(`📚 Loaded ${historicalTabs.length} historical tabs from DB.`);
 
     // 3.5 Pre-summarize current tabs that are NOT in history using lite model (batched)
@@ -127,7 +198,7 @@ async function collectAndSummarizeAllTabs() {
 
     // 5. Summarize all combined tabs in a single request
     console.log(`🧠 Running summarizeTabs for ${combinedTabs.length} tabs (current + history)...`);
-    const aiResults = await summarizeTabs(combinedTabs);
+  const aiResults = await summarizeTabs(combinedTabs);
     console.log('🤖 Full AI Response:', JSON.stringify(aiResults));
     // 6. Save the results to IndexedDB
     // Build a BEST-EFFORT title lookup using both current and history, preferring non-empty, non-"Untitled" titles
@@ -164,7 +235,7 @@ async function collectAndSummarizeAllTabs() {
     }
 
     const titles = Object.fromEntries(bestTitleByUrl.entries());
-    await saveAISummaries(aiResults, titles);
+  await saveAISummaries(aiResults, titles);
     console.log(`✅ Successfully saved AI summaries for ${aiResults.length} tabs.`);
     // Notify UI pages (e.g., viewer.html) that collection and summarization are complete
     try {
@@ -282,7 +353,7 @@ chrome.action.onClicked.addListener(async () => {
 // Read historical tabs (previous AI summaries) from IndexedDB and convert to summarizeTabs input shape
 async function fetchHistoricalTabsFromDB() {
   const DB_NAME = "NeuMemoDB";
-  const DB_VERSION = 5;
+  const DB_VERSION = 6;
   const TABS_STORE = "tabs";
 
   try {
@@ -396,7 +467,7 @@ function saveRejectedTab(url, reason) {
 // Save AI-produced summaries (array of objects that contain at least tab_id)
 async function saveAISummaries(aiResults, tabTitles) {
   const DB_NAME = "NeuMemoDB";
-  const DB_VERSION = 5;
+  const DB_VERSION = 6;
   const SESSIONS_STORE = "sessions";
   const TABS_STORE = "tabs";
 
@@ -511,6 +582,10 @@ async function saveAISummaries(aiResults, tabTitles) {
       // Skip any AI rows that don't map to a known URL we provided
       const url = (result && typeof result.tab_id === 'string') ? result.tab_id : '';
       if (!url || !Object.prototype.hasOwnProperty.call(tabTitles, url)) {
+        continue;
+      }
+      // Final safety: never persist excluded domains
+      if (isUrlExcluded(url)) {
         continue;
       }
 

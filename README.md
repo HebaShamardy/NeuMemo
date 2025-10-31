@@ -8,6 +8,7 @@ NeuMemo is a Chrome extension designed to collect and organize information from 
 - Saves collected data to IndexedDB for offline access.
 - Displays collected tabs and rejected tabs in a user-friendly viewer interface.
 - Allows users to collect data from the current session on demand.
+- Settings page to exclude specific site domains from all processing and storage.
 
 ## File Overview
 
@@ -30,6 +31,19 @@ NeuMemo is a Chrome extension designed to collect and organize information from 
 - Click on the NeuMemo extension icon in the Chrome toolbar to open the viewer.
 - Use the "Collect" button in the viewer to gather data from the currently open tabs.
 - View the collected tabs and any rejected tabs in their respective tables.
+
+### Exclude sites (Settings)
+
+If there are websites you don't want NeuMemo to analyze or store (e.g., music or personal sites), you can exclude them:
+
+1. Open Chrome's extensions page: `chrome://extensions/`.
+2. Find NeuMemo and click "Details".
+3. Click "Extension options" to open the settings.
+4. Add a domain like `spotify.com` or `https://music.youtube.com` and click Add.
+
+Notes:
+- Adding `example.com` will exclude that domain and all its subdomains (e.g., `www.example.com`, `app.example.com`).
+- Existing entries already in the local database are not automatically removed, but newly collected tabs from excluded domains will be ignored.
 
 ## Contributing
 
