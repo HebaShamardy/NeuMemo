@@ -143,10 +143,12 @@ async function collectAndSummarizeAllTabs() {
     }
 
     // 3. Fetch historical tabs from IndexedDB and combine with current tabs
-  let historicalTabs = await fetchHistoricalTabsFromDB();
-  // Filter out excluded domains from historical as well (won't be sent to AI)
-  historicalTabs = historicalTabs.filter(t => !isUrlExcluded(t.url));
-    console.log(`📚 Loaded ${historicalTabs.length} historical tabs from DB.`);
+    const historicalTabsRaw = await fetchHistoricalTabsFromDB();
+    const loadedHistoricalCountRaw = historicalTabsRaw.length;
+    // Filter out excluded domains from historical as well (won't be sent to AI)
+    let historicalTabs = historicalTabsRaw.filter(t => !isUrlExcluded(t.url));
+    const excludedHistoryCount = loadedHistoricalCountRaw - historicalTabs.length;
+    console.log(`📚 Loaded ${loadedHistoricalCountRaw} historical tabs from DB (excluded by rules: ${excludedHistoryCount}). Using ${historicalTabs.length}.`);
 
     // 3.5 Pre-summarize current tabs that are NOT in history using lite model (batched)
     const historyUrlSet = new Set(historicalTabs.map(t => t.url).filter(Boolean));
@@ -194,10 +196,14 @@ async function collectAndSummarizeAllTabs() {
     }
 
     const combinedTabs = Array.from(byUrl.values());
-    console.log(`🔗 Combined set for AI: ${combinedTabs.length} unique tabs (current provided: ${validTabs.length}, historical provided: ${historicalTabs.length}, skipped current due to history: ${skippedCurrentBecauseHistory}).`);
+    const newTabsCount = combinedTabs.filter(t => t && t.url && !historyUrlSet.has(t.url)).length;
+    const historyUsedCount = combinedTabs.filter(t => t && t.source === 'history').length;
+    console.log(
+      `🔗 Dataset prepared: ${combinedTabs.length} unique URLs (history used: ${historyUsedCount}, new: ${newTabsCount}, skipped current duplicates: ${skippedCurrentBecauseHistory}; loaded history: ${loadedHistoricalCountRaw}, excluded history: ${excludedHistoryCount}). AI will classify only new tabs; history is preserved.`
+    );
 
-    // 5. Summarize all combined tabs in a single request
-    console.log(`🧠 Running summarizeTabs for ${combinedTabs.length} tabs (current + history)...`);
+    // 5. Classify/summarize only NEW tabs; pass-through history in final results
+    console.log(`🧠 Running summarizeTabs with ${combinedTabs.length} total (AI will classify ${newTabsCount} new tabs; history preserved).`);
   const aiResults = await summarizeTabs(combinedTabs);
     console.log('🤖 Full AI Response:', JSON.stringify(aiResults));
     // 6. Save the results to IndexedDB
@@ -355,6 +361,7 @@ async function fetchHistoricalTabsFromDB() {
   const DB_NAME = "NeuMemoDB";
   const DB_VERSION = 6;
   const TABS_STORE = "tabs";
+  const SESSIONS_STORE = "sessions";
 
   try {
     const db = await new Promise((resolve, reject) => {
@@ -376,24 +383,47 @@ async function fetchHistoricalTabsFromDB() {
         const req = store.getAll();
         req.onerror = (e) => reject(e.target?.error || e);
         req.onsuccess = (e) => resolve(e.target.result || []);
-        tx.oncomplete = () => db.close();
+        tx.oncomplete = () => {};
       } catch (err) {
-        db.close();
         reject(err);
       }
     });
 
-    // Map DB records to summarizeTabs input structure
+    // Load sessions mapping id -> name to attach session info to history tabs
+    const sessionsById = await new Promise((resolve, reject) => {
+      const map = new Map();
+      try {
+        const tx = db.transaction(SESSIONS_STORE, "readonly");
+        const store = tx.objectStore(SESSIONS_STORE);
+        const req = store.getAll();
+        req.onerror = (e) => reject(e.target?.error || e);
+        req.onsuccess = (e) => {
+          const rows = e.target.result || [];
+          for (const s of rows) {
+            if (s && typeof s.id !== 'undefined') map.set(s.id, s.name || 'Uncategorized');
+          }
+        };
+        tx.oncomplete = () => resolve(map);
+      } catch (err) {
+        reject(err);
+      }
+    });
+
+    // Map DB records to summarizeTabs input structure with session metadata
     // Use the stored summary as the content fed back into the AI context
-    return tabs
+    const mapped = tabs
       .filter(Boolean)
       .map(t => ({
         title: t.title || "Untitled",
         url: t.url,
         content: t.summary || "",
-        source: 'history'
+        source: 'history',
+        sessionId: t.sessionId,
+        sessionName: sessionsById.get(t.sessionId) || 'Uncategorized',
       }))
       .filter(t => t.url); // ensure URL exists
+    db.close();
+    return mapped;
   } catch (err) {
     console.warn("⚠️ Failed to read historical tabs from DB; proceeding with current tabs only.", String(err));
     return [];
@@ -504,8 +534,9 @@ async function saveAISummaries(aiResults, tabTitles) {
       tx.onerror = (e) => reject(e.target?.error || e);
     });
 
-    // 3) Ensure sessions exist and cache name->id
-    const sessions = {};
+  // 3) Ensure sessions exist and cache name->id; also cache id->name for validation
+  const sessions = {};
+  const sessionsById = new Map();
     // Load existing sessions using a dedicated readonly transaction
     await new Promise((resolve, reject) => {
       const tx = db.transaction(SESSIONS_STORE, "readonly");
@@ -515,6 +546,7 @@ async function saveAISummaries(aiResults, tabTitles) {
         const cursor = event.target.result;
         if (cursor) {
           sessions[cursor.value.name] = cursor.value.id;
+          sessionsById.set(cursor.value.id, cursor.value.name);
           cursor.continue();
         }
       };
@@ -576,8 +608,17 @@ async function saveAISummaries(aiResults, tabTitles) {
 
     // 4) Upsert tabs according to AI results with updated session mapping
     for (const result of aiResults) {
-      const sessionName = result.session_name || "Uncategorized";
-      const sessionId = await getOrCreateSessionId(sessionName);
+      // Prefer session_id if provided and valid; otherwise resolve via session_name
+      let sessionId;
+      const providedId = result && (typeof result.session_id === 'number' || typeof result.session_id === 'string')
+        ? Number(result.session_id)
+        : undefined;
+      if (typeof providedId === 'number' && Number.isFinite(providedId) && sessionsById.has(providedId)) {
+        sessionId = providedId;
+      } else {
+        const sessionName = result.session_name || "Uncategorized";
+        sessionId = await getOrCreateSessionId(sessionName);
+      }
 
       // Skip any AI rows that don't map to a known URL we provided
       const url = (result && typeof result.tab_id === 'string') ? result.tab_id : '';

@@ -13,7 +13,7 @@ export const config = {
 
   // Lite pre-summarization (saves tokens before full grouping)
   liteSummary: {
-    batchSize: 5,        // tabs per request
+    batchSize: 3,        // tabs per request
     concurrency: 10,     // concurrent requests to the lite model
     rpm: 15,             // requests per minute rate cap
     perTabMaxTokens: 1000
