@@ -1,6 +1,41 @@
 import { initializeApp } from "firebase/app";
 import { getAI, getGenerativeModel, GoogleAIBackend, InferenceMode, Schema } from "firebase/ai";
 import { get_encoding } from "tiktoken";
+import { config } from "./config.js";
+
+// --- Utilities ---
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+// Simple per-minute rate limiter with atomic acquire via an internal mutex
+class RateLimiter {
+    constructor(rpm, windowMs = 60_000) {
+        this.rpm = rpm;
+        this.windowMs = windowMs;
+        this.timestamps = [];
+        this._mutex = Promise.resolve();
+    }
+    async acquire() {
+        // Serialize acquisition to avoid race conditions on timestamps
+        let proceed;
+        this._mutex = this._mutex.then(async () => {
+            while (true) {
+                const now = Date.now();
+                // Drop entries outside the window
+                this.timestamps = this.timestamps.filter((t) => now - t < this.windowMs);
+                if (this.timestamps.length < this.rpm) {
+                    // Reserve a slot and proceed
+                    this.timestamps.push(now);
+                    break;
+                }
+                const waitMs = this.windowMs - (now - this.timestamps[0]);
+                if (waitMs > 0) {
+                    await sleep(waitMs);
+                }
+            }
+        });
+        await this._mutex;
+    }
+}
 
 // --- Firebase Configuration ---
 const {
@@ -52,7 +87,7 @@ Input tabs:
  */
 const getModelConfig = () => ({
     // Prioritize the cloud model for this large task.
-    mode: InferenceMode.PREFER_ON_DEVICE,
+    mode: InferenceMode.PREFER_IN_CLOUD,
 
     // --- 1. Cloud Model Configuration (Primary) ---
     inCloudParams: {
@@ -114,6 +149,8 @@ const getLiteModelConfig = () => ({
 });
 
 let liteModel = getGenerativeModel(ai, getLiteModelConfig());
+// Global limiter for lite-model requests (configurable RPM)
+const liteLimiter = new RateLimiter(config.liteSummary.rpm, 60_000);
 
 // --- Search-specific schema & model (separate from summarization) ---
 const searchResponseSchema = Schema.array({
@@ -187,7 +224,7 @@ function normalizeContent(content) {
  * The cloud model (2.5 Pro) has a large limit, but being slightly
  * under is safer and avoids rate limit errors.
  */
-async function summarizeTabs(tabs, maxTokens = 200000) {
+async function summarizeTabs(tabs, maxTokens = config.summarize.maxTokens) {
     if (!Array.isArray(tabs)) {
         throw new Error('summarizeTabs expects an array of tabs');
     }
@@ -239,7 +276,8 @@ async function summarizeTabs(tabs, maxTokens = 200000) {
         if (contentTokens.length > availableTokens) {
             // Truncate the tokens and then decode
             const truncatedTokenSlice = contentTokens.slice(0, availableTokens);
-            truncatedContent = new TextDecoder().decode(encoding.decode(truncatedTokenSlice));
+            // encoding.decode returns a string; no TextDecoder needed
+            truncatedContent = encoding.decode(truncatedTokenSlice);
             console.warn(`Content for tab ${t.url} was truncated to fit within the token limit.`);
         } else {
             truncatedContent = normalizedContent;
@@ -298,6 +336,10 @@ async function summarizeTabs(tabs, maxTokens = 200000) {
 
     try {
         const result = await model.generateContent(request);
+        // Log which inference source was used by the model (cloud vs on-device)
+        try {
+            console.log('You used: ' + (result?.response?.inferenceSource || 'unknown'));
+        } catch {}
         const responseText = result.response.text();
         console.log("🤖 Raw AI Response:", responseText);
 
@@ -328,12 +370,12 @@ export { recreateModel };
  * @param {{title: string, url: string, content: string}} tab
  * @param {number} [maxInputTokens=6000] - Max input tokens passed to the lite model
  */
-export async function summarizeTabsLiteBatch(tabs, customInstruction = "", perTabMaxTokens = 1000) {
+export async function summarizeTabsLiteBatch(tabs, customInstruction = "", perTabMaxTokens = config.liteSummary.perTabMaxTokens) {
     if (!Array.isArray(tabs) || tabs.length === 0) return [];
     try {
-    // Settings: 5 tabs per request, run up to 20 requests concurrently
-    const BATCH_SIZE = 5;
-    const CONCURRENCY = 10;
+    // Settings driven by config
+    const BATCH_SIZE = config.liteSummary.batchSize;
+    const CONCURRENCY = config.liteSummary.concurrency;
 
         const encoding = get_encoding("cl100k_base");
 
@@ -358,7 +400,7 @@ export async function summarizeTabsLiteBatch(tabs, customInstruction = "", perTa
                 const normalized = normalizeContent(t?.content || t?.summary || "");
                 const tokens = encoding.encode(normalized);
                 const truncated = tokens.length > perTabMaxTokens
-                    ? new TextDecoder().decode(encoding.decode(tokens.slice(0, perTabMaxTokens)))
+                    ? encoding.decode(tokens.slice(0, perTabMaxTokens))
                     : normalized;
                 promptParts.push(
                     `\n<NEMO_tab>\nTitle: ${title}\nURL: ${url}\nContent:\n<CONTENT_START>\n${truncated}\n<CONTENT_END>`
@@ -369,6 +411,8 @@ export async function summarizeTabsLiteBatch(tabs, customInstruction = "", perTa
                 contents: [ { role: 'user', parts: [{ text: promptParts.join("\n") }] } ]
             };
 
+            // Respect rate limit before issuing the request
+            await liteLimiter.acquire();
             const result = await liteModel.generateContent(request);
             const text = (result?.response?.text?.() || "").trim();
             let parsed;
@@ -416,7 +460,7 @@ export async function summarizeTabsLiteBatch(tabs, customInstruction = "", perTa
             return results;
         };
 
-        // Run up to 5 chunk requests at a time
+    // Run up to CONCURRENCY chunk requests at a time
         const chunkResults = await mapWithConcurrency(chunks, CONCURRENCY, summarizeChunk);
 
         // Flatten and dedupe by URL (last wins)
@@ -454,10 +498,10 @@ export async function summarizeTabLite(tab, perTabMaxTokens = 1000) {
  * @param {number} [topK=3]
  * @param {number} [perTabMaxTokens=200]
  */
-export async function searchRelevantTabs(tabs, query, topK = 3, perTabMaxTokens = 200) {
+export async function searchRelevantTabs(tabs, query, topK = 3, perTabMaxTokens = config.search.perTabMaxTokens) {
     if (!Array.isArray(tabs) || tabs.length === 0) return [];
-    const BATCH_SIZE = 10;
-    const CONCURRENCY = 4;
+    const BATCH_SIZE = config.search.batchSize;
+    const CONCURRENCY = config.search.concurrency;
     const encoding = get_encoding("cl100k_base");
 
     const buildPromptForChunk = (chunkTabs) => {
@@ -482,7 +526,7 @@ export async function searchRelevantTabs(tabs, query, topK = 3, perTabMaxTokens 
             const normalized = normalizeContent(t?.content || t?.summary || "");
             const tokens = encoding.encode(normalized);
             const truncated = tokens.length > perTabMaxTokens
-                ? new TextDecoder().decode(encoding.decode(tokens.slice(0, perTabMaxTokens)))
+                ? encoding.decode(tokens.slice(0, perTabMaxTokens))
                 : normalized;
             parts.push(`\n<NEMO_tab>\nTitle: ${title}\nURL: ${url}\nContent:\n<CONTENT_START>\n${truncated}\n<CONTENT_END>`);
         }
