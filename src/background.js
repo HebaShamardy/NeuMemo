@@ -376,24 +376,47 @@ async function fetchHistoricalTabsFromDB() {
         const req = store.getAll();
         req.onerror = (e) => reject(e.target?.error || e);
         req.onsuccess = (e) => resolve(e.target.result || []);
-        tx.oncomplete = () => db.close();
+        tx.oncomplete = () => {};
       } catch (err) {
-        db.close();
         reject(err);
       }
     });
 
-    // Map DB records to summarizeTabs input structure
+    // Load sessions mapping id -> name to attach session info to history tabs
+    const sessionsById = await new Promise((resolve, reject) => {
+      const map = new Map();
+      try {
+        const tx = db.transaction(SESSIONS_STORE, "readonly");
+        const store = tx.objectStore(SESSIONS_STORE);
+        const req = store.getAll();
+        req.onerror = (e) => reject(e.target?.error || e);
+        req.onsuccess = (e) => {
+          const rows = e.target.result || [];
+          for (const s of rows) {
+            if (s && typeof s.id !== 'undefined') map.set(s.id, s.name || 'Uncategorized');
+          }
+        };
+        tx.oncomplete = () => resolve(map);
+      } catch (err) {
+        reject(err);
+      }
+    });
+
+    // Map DB records to summarizeTabs input structure with session metadata
     // Use the stored summary as the content fed back into the AI context
-    return tabs
+    const mapped = tabs
       .filter(Boolean)
       .map(t => ({
         title: t.title || "Untitled",
         url: t.url,
         content: t.summary || "",
-        source: 'history'
+        source: 'history',
+        sessionId: t.sessionId,
+        sessionName: sessionsById.get(t.sessionId) || 'Uncategorized',
       }))
       .filter(t => t.url); // ensure URL exists
+    db.close();
+    return mapped;
   } catch (err) {
     console.warn("⚠️ Failed to read historical tabs from DB; proceeding with current tabs only.", String(err));
     return [];
@@ -504,8 +527,9 @@ async function saveAISummaries(aiResults, tabTitles) {
       tx.onerror = (e) => reject(e.target?.error || e);
     });
 
-    // 3) Ensure sessions exist and cache name->id
-    const sessions = {};
+  // 3) Ensure sessions exist and cache name->id; also cache id->name for validation
+  const sessions = {};
+  const sessionsById = new Map();
     // Load existing sessions using a dedicated readonly transaction
     await new Promise((resolve, reject) => {
       const tx = db.transaction(SESSIONS_STORE, "readonly");
@@ -515,6 +539,7 @@ async function saveAISummaries(aiResults, tabTitles) {
         const cursor = event.target.result;
         if (cursor) {
           sessions[cursor.value.name] = cursor.value.id;
+          sessionsById.set(cursor.value.id, cursor.value.name);
           cursor.continue();
         }
       };
@@ -576,8 +601,17 @@ async function saveAISummaries(aiResults, tabTitles) {
 
     // 4) Upsert tabs according to AI results with updated session mapping
     for (const result of aiResults) {
-      const sessionName = result.session_name || "Uncategorized";
-      const sessionId = await getOrCreateSessionId(sessionName);
+      // Prefer session_id if provided and valid; otherwise resolve via session_name
+      let sessionId;
+      const providedId = result && (typeof result.session_id === 'number' || typeof result.session_id === 'string')
+        ? Number(result.session_id)
+        : undefined;
+      if (typeof providedId === 'number' && Number.isFinite(providedId) && sessionsById.has(providedId)) {
+        sessionId = providedId;
+      } else {
+        const sessionName = result.session_name || "Uncategorized";
+        sessionId = await getOrCreateSessionId(sessionName);
+      }
 
       // Skip any AI rows that don't map to a known URL we provided
       const url = (result && typeof result.tab_id === 'string') ? result.tab_id : '';

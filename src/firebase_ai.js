@@ -61,25 +61,27 @@ const responseSchema = Schema.array({
             tab_id: Schema.string(),
             session_name: Schema.string(),
             summarized_content: Schema.string(),
+            // Optional: session id for mapping to DB; use null/omitted when creating a new session
+            session_id: Schema.number(),
         }
     })
 });
 
 // --- Prompt Template ---
-const promptTemplate = `You are an AI tab session manager.
-Your goal is to group tabs into meaningful, thematic sessions.
-Analyze the following tabs and group them into logical sessions.
-The session names should be descriptive and specific, but not so granular that every tab gets its own session. For example, group tabs about 'React Hooks' and 'State Management' into a session called 'React Development', not just 'Development'.
-Assign each tab a \`session_name\` and a factual \`summarized_content\`.
-Tabs with the same topic MUST share the same \`session_name\`.
+const promptTemplate = `You are an AI session classifier.
+Task: Only classify NEW tabs into sessions and summarize ONLY the new tabs.
 
-Output JSON ONLY as an array of objects with this exact shape: { tab_id: string, session_name: string, summarized_content: string }.
-IMPORTANT MAPPING RULES:
-- Set tab_id EXACTLY to the tab's URL from the input. Do NOT invent IDs like "tab_1" or "url_3".
-- Copy the URL literally; do not alter, shorten, or paraphrase it.
-- Return one object per input tab (do not drop tabs).
+Existing sessions (from history) are immutable: do not rename, merge, or recreate them. If a new tab clearly belongs to one of the existing sessions, assign it to that session and use the exact session_name and session_id provided. If no existing session fits, propose a new session by providing a specific, descriptive session_name and OMIT the session_id field.
 
-Input tabs:
+Output JSON ONLY as an array of objects with this exact shape:
+{ tab_id: string, session_name: string, summarized_content: string, session_id?: number }
+
+Rules:
+- Do not include historical tabs in the output (they are already stored). Output objects ONLY for the new tabs provided below.
+- Set tab_id EXACTLY to the tab's URL from the input.
+- For assignment to existing sessions, copy session_name exactly as shown and set session_id to that numeric id.
+- For a new session, choose a new session_name (not generic), and omit session_id entirely (do not include null or 0).
+- summarized_content: a factual 8–15 sentence summary of the tab content (plain text, no markdown).
 `;
 
 /**
@@ -240,6 +242,18 @@ async function summarizeTabs(tabs, maxTokens = config.summarize.maxTokens) {
     const historyTabs = tabs.filter(t => t && t.source === 'history');
     const currentTabs = tabs.filter(t => !t || t.source !== 'history');
 
+    // Build existing sessions catalog from history tabs
+    const sessionsById = new Map(); // id -> { id, name, urls: [] }
+    for (const t of historyTabs) {
+        const sid = typeof t.sessionId === 'number' ? t.sessionId : undefined;
+        const sname = t.sessionName || 'Uncategorized';
+        if (sid !== undefined) {
+            if (!sessionsById.has(sid)) sessionsById.set(sid, { id: sid, name: sname, urls: [] });
+            const bucket = sessionsById.get(sid);
+            if (t.url) bucket.urls.push(t.url);
+        }
+    }
+
     const appendSectionHeader = (text) => {
         const header = `\n${text}\n`;
         const cost = encoding.encode(header).length;
@@ -299,16 +313,28 @@ async function summarizeTabs(tabs, maxTokens = config.summarize.maxTokens) {
         return true;
     };
 
-    if (historyTabs.length > 0) {
-        if (appendSectionHeader('Existing saved tabs from IndexedDB (previous sessions):')) {
-            for (const t of historyTabs) {
-                if (!appendTab(t)) break; // Stop if we run out of tokens
+    // 1) Describe existing sessions briefly (ids, names, sample URLs) — we don't include history content to save tokens
+    if (sessionsById.size > 0) {
+        const headerOk = appendSectionHeader('Existing sessions (immutable):');
+        if (headerOk) {
+            for (const sess of sessionsById.values()) {
+                // limit sample URLs to avoid token bloat
+                const sample = sess.urls.slice(0, 5).join('\n- ');
+                const block = `\n<SESSION>\nID: ${sess.id}\nName: ${sess.name}\nKnown URLs (sample):\n- ${sample}`;
+                const cost = encoding.encode(block).length;
+                if (totalTokens + cost <= maxTokens) {
+                    tabsInput += block;
+                    totalTokens += cost;
+                } else {
+                    break;
+                }
             }
         }
     }
 
+    // 2) Include only NEW tabs for classification/summarization
     if (currentTabs.length > 0) {
-        if (appendSectionHeader('Newly collected open tabs:')) {
+        if (appendSectionHeader('Newly collected open tabs (to classify and summarize):')) {
             for (const t of currentTabs) {
                 if (!appendTab(t)) break; // Stop if we run out of tokens
             }
@@ -318,10 +344,16 @@ async function summarizeTabs(tabs, maxTokens = config.summarize.maxTokens) {
     console.log(`📊 Prompt includes ${tabsInPrompt} of ${tabs.length} tabs provided.`);
     console.log(`📊 Final prompt token count: ${totalTokens} (Max: ${maxTokens})`);
 
-    // If no tabs could be added, abort.
+    // If no new tabs could be added, return passthrough of historical with no AI call
     if (tabsInPrompt === 0) {
         console.warn("No tabs could be added to the prompt. Aborting AI call.");
-        return [];
+        // Return existing history as-is so downstream reconciliation doesn't delete them
+        return historyTabs.map(h => ({
+            tab_id: h.url,
+            session_name: h.sessionName || 'Uncategorized',
+            summarized_content: h.content || '',
+            session_id: typeof h.sessionId === 'number' ? h.sessionId : null,
+        }));
     }
 
     const finalPrompt = `${promptTemplate}\n${tabsInput}`;
@@ -349,15 +381,34 @@ async function summarizeTabs(tabs, maxTokens = config.summarize.maxTokens) {
             if (!Array.isArray(parsed)) {
                 throw new Error('AI response was not an array');
             }
-            return parsed;
+            // Merge: pass-through all history tabs, and append AI results for new tabs
+            const passthrough = historyTabs.map(h => ({
+                tab_id: h.url,
+                session_name: h.sessionName || 'Uncategorized',
+                summarized_content: h.content || '',
+                session_id: typeof h.sessionId === 'number' ? h.sessionId : null,
+            }));
+            return [...passthrough, ...parsed];
         } catch (jsonError) {
             console.error("❌ JSON parsing failed even with schema enforcement.", jsonError.message, "Response was:", responseText);
-            return []; 
+            // Fallback: if AI part fails, at least return historical
+            return historyTabs.map(h => ({
+                tab_id: h.url,
+                session_name: h.sessionName || 'Uncategorized',
+                summarized_content: h.content || '',
+                session_id: typeof h.sessionId === 'number' ? h.sessionId : null,
+            })); 
         }
     } catch (error) {
         console.error("❌ Error during AI content generation.", error);
         // This is often a rate limit (429) or other API error.
-        return [];
+        // Return historical only to avoid data loss downstream
+        return historyTabs.map(h => ({
+            tab_id: h.url,
+            session_name: h.sessionName || 'Uncategorized',
+            summarized_content: h.content || '',
+            session_id: typeof h.sessionId === 'number' ? h.sessionId : null,
+        }));
     }
 }
 
