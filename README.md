@@ -1,54 +1,139 @@
-# NeuMemo Chrome Extension
+# NeuMemo (Nemo) — AI-powered session manager for Chrome
 
-NeuMemo is a Chrome extension designed to collect and organize information from your browsing sessions. It captures the titles, URLs, and text content of open tabs and stores them locally for easy access and organization.
+NeuMemo saves your browsing sessions by collecting your open tabs, generating concise summaries with Gemini via Firebase AI, and organizing them into named sessions you can search, reopen, and manage later. All data is stored locally in your browser (IndexedDB). No server required.
 
-## Features
+## Highlights
 
-- Collects tab data (title, URL, content) from all open tabs.
-- Saves collected data to IndexedDB for offline access.
-- Displays collected tabs and rejected tabs in a user-friendly viewer interface.
-- Allows users to collect data from the current session on demand.
-- Settings page to exclude specific site domains from all processing and storage.
+- One-click “Organize Tabs” to capture all open tabs (title, URL, and text content)
+- AI summaries and smart grouping into sessions using Google Gemini through Firebase AI
+- Fast on-device “lite” summaries to save cost/tokens; batched and rate-limited
+- Semantic search over your saved tabs with relevance scoring
+- Helpful Google Search hints: on google.com, Nemo suggests reopening the best-matching past session
+- Full viewer UI to browse sessions, create new sessions, move/delete tabs, rename/delete sessions, open an entire session in a new window
+- Privacy-first: everything is stored locally; excluded domains are never processed or sent to AI
 
-## File Overview
+## How it works (at a glance)
 
-- **background.js**: The background script that manages tab data collection and storage.
-- **content.js**: The content script that runs on web pages to gather tab information.
-- **viewer.html**: The HTML structure for the viewer interface displaying collected and rejected tabs.
-- **viewer.js**: The JavaScript logic for populating the viewer with data from IndexedDB.
-- **manifest.json**: The configuration file for the Chrome extension.
+1) Capture content from open tabs and normalize it (content script + background)
+2) Reuse historical summaries where possible to avoid AI token costs (history preferred over current for dedupe)
+3) Pre-summarize new tabs with a lightweight on-device model (batched) to cut prompt size
+4) Ask Gemini to classify only new tabs into sessions and produce searchable summaries
+5) Save results in IndexedDB and present them in the viewer UI
 
-## Installation
+## Features in detail
 
-1. Download or clone the repository.
-2. Open Chrome and navigate to `chrome://extensions/`.
-3. Enable "Developer mode" in the top right corner.
-4. Click on "Load unpacked" and select the `neumemo` directory.
-5. The NeuMemo extension should now be installed and ready to use.
+- Session organizer
+	- Click the Nemo icon to open `viewer.html` and press the big button to organize your current tabs.
+	- Tabs are grouped into sessions with concise summaries. You can create new sessions, move tabs between sessions, rename or delete sessions, and open all tabs in a session in a new window.
 
-## Usage
+- Semantic search
+	- Type a query in the viewer’s search box and press Enter. Nemo uses a search-optimized prompt to find the most relevant tabs across all sessions.
 
-- Click on the NeuMemo extension icon in the Chrome toolbar to open the viewer.
-- Use the "Collect" button in the viewer to gather data from the currently open tabs.
-- View the collected tabs and any rejected tabs in their respective tables.
+- Google Search hints
+	- On Google results pages, Nemo inspects your query and, if a strong match exists in your history, shows a small suggestion card to reopen that session.
 
-### Exclude sites (Settings)
+- Exclude domains (Settings)
+	- From the extension options page, add domains (e.g., `example.com`) you don’t want Nemo to process or store.
+	- Exclusions apply to future captures and prevent content from being sent to the AI model.
 
-If there are websites you don't want NeuMemo to analyze or store (e.g., music or personal sites), you can exclude them:
+- Performance and cost controls
+	- Tunable concurrency, rate limits, and token caps live in `src/config.js`.
+	- Historical summaries are reused to minimize token usage.
 
-1. Open Chrome's extensions page: `chrome://extensions/`.
-2. Find NeuMemo and click "Details".
-3. Click "Extension options" to open the settings.
-4. Add a domain like `spotify.com` or `https://music.youtube.com` and click Add.
+- Local-first storage
+	- All sessions and summaries are stored in your browser’s IndexedDB (`NeuMemoDB`). No external database is used.
 
-Notes:
-- Adding `example.com` will exclude that domain and all its subdomains (e.g., `www.example.com`, `app.example.com`).
-- Existing entries already in the local database are not automatically removed, but newly collected tabs from excluded domains will be ignored.
+## Permissions explained
+
+- `tabs`, `activeTab`, `scripting`, `storage`: capture content from tabs and persist locally
+- `host_permissions: *://*/*`: allow reading page content on user-initiated capture
+
+Content scripts run only on Google domains for the search hint feature. The actual capture step is performed by the background service worker on demand when you click “Organize Tabs”
+
+## Project structure
+
+- `src/manifest.json` — Chrome extension manifest (MV3)
+- `src/background.js` — Orchestrates tab capture, AI flow, and persistence
+- `src/content.js` — Injected into pages to return title/URL/text; also shows Google Search hint
+- `src/firebase_ai.js` — Firebase AI + Gemini prompts, schemas, summarization, search
+- `src/config.js` — Performance knobs (concurrency, rate limits, token caps)
+- `src/viewer.html`, `src/viewer.js`, `src/styles.css` — The sessions UI
+- `src/options.html`, `src/options.js` — Exclusion rules UI (domains)
+- `vite.config.js` — Vite build tailored for Chrome extensions
+
+## Setup
+
+Prerequisites:
+- Node.js 18+ and npm
+- A Firebase project with a Web App configured
+- Access to Firebase AI with Google AI backend (Gemini). Ensure your project has the feature enabled and billing if required by your tier.
+
+Environment variables:
+- Copy `.env.example` to `.env` and fill in the `VITE_FIREBASE_*` values with your Firebase Web App config.
+	- These are the typical Firebase web keys (not secrets) exposed to the client by Vite.
+
+Install and build:
+
+```powershell
+# From the repo root
+npm ci
+npm run build
+```
+
+Load the extension in Chrome:
+1. Open `chrome://extensions/`
+2. Enable “Developer mode”
+3. Click “Load unpacked” and select the `dist/` folder
+4. Pin Nemo and click it to open the viewer
+
+Developer watch mode:
+
+```powershell
+npm run dev
+```
+
+Then click “Reload” on the Chrome extensions page after builds complete.
+
+## Using Nemo
+
+1. Open the viewer (click the Nemo icon) and press “Organize Tabs”
+2. Wait for the overlay to finish (free-tier builds can take ~2–3 minutes)
+3. Browse sessions, open a session in a new window, move or delete tabs
+4. Create a new session: click “New Session” in the sidebar and give it a name
+5. Move a tab to another session: click “Move” on the tab and choose the destination session
+6. Search: type your query and press Enter to see the most relevant tabs
+7. Settings: on the extension’s Details page, click “Extension options” to add excluded domains
+
+## Configuration knobs (`src/config.js`)
+
+- `injection` — concurrency and timeouts for capturing tab content
+- `liteSummary` — batch size, concurrency, RPM, and per-tab token cap for on-device pre-summaries
+- `summarize.maxTokens` — overall input token cap for the main prompt
+- `search` — batch size, concurrency, and per-tab token cap for semantic search
+
+Tune these if you hit rate limits or want faster/slower processing.
+
+## Privacy
+
+- All data is stored locally in IndexedDB. No server calls are made by the extension itself.
+- When you press “Save Session,” Nemo sends content to the AI model (Gemini) through the Firebase AI SDK to generate summaries and groupings.
+- Excluded domains are never processed or sent.
+
+## Troubleshooting
+
+- Nothing shows in the viewer
+	- Ensure you loaded `dist/` (not `src/`) as the unpacked extension after building.
+- Images don’t render
+	- Verify files under `src/imgs` are present; on case-sensitive systems, ensure file names match references in code.
+- Slow or incomplete AI results
+	- Free-tier rate limits can delay responses. Reduce concurrency/RPM in `config.js` or try again later.
+- Search returns nothing
+	- Ensure you pressed Enter and that you have saved sessions. Try a different keyword.
 
 ## Contributing
 
-Contributions are welcome! If you have suggestions for improvements or new features, please open an issue or submit a pull request.
+Issues and PRs are welcome. Please open an issue to discuss larger changes. If you’re adding new UI, keep the existing style and MV3 constraints in mind.
 
 ## License
 
-This project is licensed under the MIT License. See the LICENSE file for more details.
+MIT License — see `LICENSE` for details.
