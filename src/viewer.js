@@ -253,11 +253,14 @@ async function handleSearch(event) {
     // Unselect any active session
     document.querySelectorAll("#sessions-list li.active").forEach(item => item.classList.remove("active"));
 
+    showLoading(true, 'search');
     chrome.runtime.sendMessage({ type: "SEARCH_TABS", query: query, tabs: allTabs }, (response) => {
         if (chrome.runtime.lastError) {
             console.error("Error sending search message:", chrome.runtime.lastError);
+            showLoading(false);
             return;
         }
+        showLoading(false);
         displaySearchedTabs(response.tabs);
     });
 }
@@ -306,7 +309,7 @@ function getAllTabs() {
 }
 
 function saveCurrentSession() {
-    showLoading(true);
+    showLoading(true, 'collect');
     chrome.runtime.sendMessage({ type: "COLLECT_TABS" }, (response) => {
         if (chrome.runtime.lastError) {
             console.error("Error sending collect message:", chrome.runtime.lastError);
@@ -318,11 +321,22 @@ function saveCurrentSession() {
     });
 }
 
-function showLoading(isLoading) {
+function showLoading(isLoading, mode = 'collect') {
     const overlay = document.getElementById("loading-overlay");
     const saveBtn = document.getElementById("save-session");
+    const titleEl = overlay?.querySelector('.loading-title');
+    const subtextEl = overlay?.querySelector('.loading-subtext');
     if (!overlay) return;
     if (isLoading) {
+        if (titleEl && subtextEl) {
+            if (mode === 'search') {
+                titleEl.textContent = 'Searching your tabs…';
+                subtextEl.textContent = 'Hang tight—finding the most relevant results.';
+            } else {
+                titleEl.textContent = 'Organizing your tabs into sessions…';
+                subtextEl.textContent = 'This may take about 2–3 minutes due to free-tier rate limits. Perfect time to grab a coffee—when you come back, it should be all set ☕';
+            }
+        }
         overlay.classList.remove("hidden");
         if (saveBtn) saveBtn.disabled = true;
     } else {

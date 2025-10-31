@@ -125,9 +125,12 @@ function renderNemoSideHint(sessionName, sessionId, matchCount) {
   bar.style.gap = '8px';
   bar.style.padding = '12px 12px 0 12px';
 
-  const logo = document.createElement('div');
-  logo.textContent = '🧠';
-  logo.style.fontSize = '20px';
+  const logo = document.createElement('img');
+  logo.src = chrome.runtime.getURL('imgs/logo.png');
+  logo.alt = 'NeuMemo';
+  logo.style.width = '22px';
+  logo.style.height = '22px';
+  logo.style.objectFit = 'contain';
   bar.appendChild(logo);
 
   const title = document.createElement('div');
