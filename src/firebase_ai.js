@@ -89,7 +89,7 @@ Rules:
  */
 const getModelConfig = () => ({
     // Prioritize the cloud model for this large task.
-    mode: InferenceMode.PREFER_ON_DEVICE,
+    mode: InferenceMode.PREFER_IN_CLOUD,
 
     // --- 1. Cloud Model Configuration (Primary) ---
     inCloudParams: {
