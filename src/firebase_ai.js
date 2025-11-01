@@ -89,7 +89,7 @@ Rules:
  */
 const getModelConfig = () => ({
     // Prioritize the cloud model for this large task.
-    mode: InferenceMode.PREFER_IN_CLOUD,
+    mode: InferenceMode.PREFER_ON_DEVICE,
 
     // --- 1. Cloud Model Configuration (Primary) ---
     inCloudParams: {
@@ -357,10 +357,6 @@ async function summarizeTabs(tabs, maxTokens = config.summarize.maxTokens) {
     }
 
     const finalPrompt = `${promptTemplate}\n${tabsInput}`;
-    // Log the full final prompt for debugging/inspection
-    try {
-        console.log("📝 finalPrompt:\n" + finalPrompt);
-    } catch {}
     console.log(`📝 Sending final prompt to AI (${totalTokens} tokens).`);
 
     const request = {

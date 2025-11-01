@@ -349,7 +349,7 @@ function showLoading(isLoading, mode = 'collect') {
                 subtextEl.textContent = 'Hang tight—finding the most relevant results.';
             } else {
                 titleEl.textContent = 'Organizing your tabs into sessions…';
-                subtextEl.textContent = 'This may take about 2-3 minutes if you have lots of tabs. Perfect time to grab a coffee—when you come back, it should be all set ☕';
+                subtextEl.textContent = 'This may take a few minutes. Perfect time to grab a coffee—when you come back, it should be all set ☕';
             }
         }
         overlay.classList.remove("hidden");
