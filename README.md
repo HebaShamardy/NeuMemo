@@ -94,6 +94,12 @@ npm run dev
 
 Then click “Reload” on the Chrome extensions page after builds complete.
 
+## Testing Note for reviewers:
+To test background functionality accurately, please keep the browser Inspect Console open.
+The behavior difference is due to Chrome’s service worker lifespan.
+(Fixed in branch hot-fix/service-worker-inactive, unmerged for fairness not to merge any code after deadline.)
+The fix will be merged post evaluation
+
 ## Performance notes
 
 - If you have more than ~20 open tabs, organizing a session can take about 2–5 minutes due to model calls, batching, and free‑tier rate limits.
