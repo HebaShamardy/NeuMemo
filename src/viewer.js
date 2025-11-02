@@ -7,8 +7,22 @@ const EXCLUDED_URLS_STORE = "excluded_urls";
 let db;
 // Keep a long-lived port open during collection to keep the background SW alive
 let collectKeepAlivePort = null;
+// Extra lifeline: persistent keepalive while the viewer is open
+let viewerKeepAlivePort = null;
 
 document.addEventListener("DOMContentLoaded", () => {
+    // Establish a persistent keepalive port for the duration of the viewer page
+    try {
+        viewerKeepAlivePort = chrome.runtime.connect({ name: 'nemo-viewer-keepalive' });
+        // Send lightweight heartbeats periodically (optional)
+        try {
+            setInterval(() => {
+                try { viewerKeepAlivePort?.postMessage({ t: Date.now() }); } catch {}
+            }, 240000);
+        } catch {}
+        window.addEventListener('beforeunload', () => { try { viewerKeepAlivePort?.disconnect(); } catch {} });
+    } catch {}
+
     initDatabase().then(() => {
         loadSessions();
         document.getElementById("save-session").addEventListener("click", saveCurrentSession);
