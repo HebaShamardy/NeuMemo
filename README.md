@@ -94,11 +94,15 @@ npm run dev
 
 Then click “Reload” on the Chrome extensions page after builds complete.
 
-## Testing Note for reviewers:
-To test background functionality accurately, please keep the browser Inspect Console open.
-The behavior difference is due to Chrome’s service worker lifespan.
-(Fixed in branch hot-fix/service-worker-inactive, unmerged for fairness not to merge any code after deadline.)
-The fix will be merged post evaluation
+## 📝 Critical Testing Note for reviewers
+
+To test background functionality accurately, please keep Chrome DevTools (Inspect Console) open. Due to the short lifespan of a Service Worker in a Chrome Extension (a known Chrome behavior), the extension may pause or stop running after a short period of inactivity.
+
+Workaround:
+- Open Chrome Developer Tools (F12 or Cmd+Option+J) on the main viewer page of the extension before clicking “Organize Tabs”. Keeping DevTools open forces Chrome to keep the Service Worker alive and running.
+
+Status:
+- A minor code fix resolving this is ready on the `hot-fix/service-worker-inactive` branch. To adhere strictly to the submission deadline, the `master` branch includes this testing note as the required workaround. The fix will be merged post evaluation.
 
 ## Performance notes
 
