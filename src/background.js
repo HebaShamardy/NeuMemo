@@ -10,11 +10,14 @@ let excludedDomains = [];
 const keepAlivePorts = new Set();
 chrome.runtime.onConnect.addListener((port) => {
   try {
-    if (port && port.name === 'nemo-collect-keepalive') {
+    // Accept any Nemo keepalive channel (e.g., from viewer or during collection)
+    if (port && /nemo-.*keepalive/.test(port.name)) {
       keepAlivePorts.add(port);
       port.onDisconnect.addListener(() => {
         keepAlivePorts.delete(port);
       });
+      // Optionally handle heartbeats; no-op keeps the message channel alive
+      port.onMessage.addListener(() => {});
     }
   } catch (e) {
     console.warn('Keep-alive port handling failed:', e);
@@ -149,6 +152,7 @@ async function collectAndSummarizeAllTabs() {
 
     if (injectableTabs.length === 0) {
       console.log('No injectable tabs found. Nothing to do.');
+      try { chrome.runtime.sendMessage({ type: "COLLECT_TABS_DONE", count: 0 }); } catch {}
       return;
     }
     console.log(`✅ Found ${injectableTabs.length} injectable tabs.`);
@@ -177,6 +181,9 @@ async function collectAndSummarizeAllTabs() {
 
     if (validTabs.length === 0) {
       console.log('No content was collected. Aborting summarization.');
+      try {
+        chrome.runtime.sendMessage({ type: "COLLECT_TABS_FAILED", error: 'No content was collected from your open tabs.' });
+      } catch {}
       return;
     }
 
@@ -367,7 +374,18 @@ async function injectAndGetContent(tab) {
     // and send it back. This is more reliable than having the content script send a message
     // on its own.
     const response = await withTimeout(
-      chrome.tabs.sendMessage(tab.id, { type: 'GET_CONTENT' }),
+      new Promise((resolve, reject) => {
+        try {
+          chrome.tabs.sendMessage(tab.id, { type: 'GET_CONTENT' }, (resp) => {
+            if (chrome.runtime.lastError) {
+              return reject(new Error(chrome.runtime.lastError.message || 'sendMessage failed'));
+            }
+            resolve(resp);
+          });
+        } catch (e) {
+          reject(e);
+        }
+      }),
       config.injection.contentFetchTimeoutMs,
       'content fetch'
     );
